@@ -61,11 +61,11 @@ def get_data(ticker, interval_label, interval_code):
         if data.empty:
             return None
 
-        # 處理 MultiIndex 與時區
+        # 處理 MultiIndex
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
         
-        # 【關鍵修復】移除時區資訊，避免圖表錯亂
+        # 移除時區
         data.index = data.index.tz_localize(None)
 
         # 年 K 線重算
@@ -99,7 +99,6 @@ def get_data(ticker, interval_label, interval_code):
         data = data.reset_index()
         data.columns = [col.lower() for col in data.columns]
         
-        # 確保日期字串存在
         if 'date' in data.columns:
             data['date_str'] = data['date'].dt.strftime('%Y-%m-%d')
         elif 'index' in data.columns:
@@ -112,10 +111,10 @@ def get_data(ticker, interval_label, interval_code):
 
 df = get_data(ticker, selected_interval_label, interval)
 
-# 開發者診斷工具 (保留著讓你確認數據)
-with st.expander("🛠️ 開發者診斷工具"):
+# 開發者診斷工具
+with st.expander("🛠️ 開發者診斷工具 (展開查看資料狀態)"):
     if df is not None:
-        st.write("數據預覽：", df.head())
+        st.write("數據預覽 (前5筆):", df.head())
     else:
         st.write("無數據")
 
@@ -124,7 +123,7 @@ if df is None or df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 圖表配置 (完美修復版)
+# 4. 圖表配置 (修復 Missing Keys 問題)
 # ---------------------------------------------------------
 COLOR_UP = '#FF5252'
 COLOR_DOWN = '#00B746'
@@ -146,21 +145,27 @@ for index, row in df.iterrows():
         'volume': float(row['volume']) if not pd.isna(row['volume']) else 0.0
     }
     
-    # 【核心修復】動態加入指標數據
-    # 只有當數值不是 None 時，才加入字典。避免送出 {'ma5': None} 導致圖表崩潰。
-    indicators = {
-        'ma5': row.get('ma5'), 'ma10': row.get('ma10'), 'ma20': row.get('ma20'),
-        'bbu': row.get('bbu_20_2.0'), 'bbl': row.get('bbl_20_2.0'),
-        'macd': row.get('macd_12_26_9'), 'signal': row.get('macds_12_26_9'), 'hist': row.get('macdh_12_26_9'),
-        'rsi': row.get('rsi'),
-        'k': row.get('stochk_14_3_3'), 'd': row.get('stochd_14_3_3'),
-        'obv': row.get('obv'), 'bias': row.get('bias')
-    }
+    # 【關鍵修復】: 無論數值是否為 None，Key 都必須存在！
+    # 這樣 JSON 才會生成 "ma5": null，而不是缺項。
     
-    for key, val in indicators.items():
-        val_float = safe_float(val)
-        if val_float is not None:
-            candle[key] = val_float
+    candle['ma5'] = safe_float(row.get('ma5'))
+    candle['ma10'] = safe_float(row.get('ma10'))
+    candle['ma20'] = safe_float(row.get('ma20'))
+    
+    candle['bbu'] = safe_float(row.get('bbu_20_2.0'))
+    candle['bbl'] = safe_float(row.get('bbl_20_2.0'))
+    
+    candle['macd'] = safe_float(row.get('macd_12_26_9'))
+    candle['signal'] = safe_float(row.get('macds_12_26_9'))
+    candle['hist'] = safe_float(row.get('macdh_12_26_9'))
+    
+    candle['rsi'] = safe_float(row.get('rsi'))
+    
+    candle['k'] = safe_float(row.get('stochk_14_3_3'))
+    candle['d'] = safe_float(row.get('stochd_14_3_3'))
+    
+    candle['obv'] = safe_float(row.get('obv'))
+    candle['bias'] = safe_float(row.get('bias'))
             
     chart_data.append(candle)
 
