@@ -1,0 +1,5 @@
+streamlit
+yfinance
+pandas_ta
+streamlit-lightweight-charts
+pandas
