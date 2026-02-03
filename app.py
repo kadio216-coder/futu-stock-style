@@ -9,7 +9,7 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股專業看盤 (仿富途牛牛 - V3.1 手機優化版)")
+st.subheader("台美股")
 
 # ---------------------------------------------------------
 # 2. 側邊欄設定
