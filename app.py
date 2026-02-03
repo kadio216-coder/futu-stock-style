@@ -9,30 +9,20 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股專業看盤 (仿富途牛牛 - 終極修復版)")
+st.subheader("台美股K線")
 
 # ---------------------------------------------------------
-# 2. 側邊欄設定
+# 2. 側邊欄設定 (移除重整按鈕)
 # ---------------------------------------------------------
 st.sidebar.header("股票設定")
-
-# 強制清除快取按鈕 (如果圖表怪怪的，按這個)
-if st.sidebar.button("🔄 強制重整數據"):
-    st.cache_data.clear()
 
 market_mode = st.sidebar.radio("選擇市場", options=["台股 (上市)", "台股 (上櫃)", "美股/其他"], index=2)
 raw_symbol = st.sidebar.text_input("輸入代碼", value="MU")
 
-interval_map = {
-    "日 K": "1d",
-    "週 K": "1wk",
-    "月 K": "1mo",
-    "季 K": "3mo",
-    "年 K": "1y" 
-}
+interval_map = {"日 K": "1d", "週 K": "1wk", "月 K": "1mo", "季 K": "3mo", "年 K": "1y"}
 selected_interval_label = st.sidebar.selectbox("K 棒週期", options=list(interval_map.keys()), index=0)
-interval = interval_map[selected_interval_label]
 
+# 自動組裝代碼
 if market_mode == "台股 (上市)":
     ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
 elif market_mode == "台股 (上櫃)":
@@ -45,198 +35,176 @@ st.sidebar.caption(f"查詢代碼: {ticker}")
 # ---------------------------------------------------------
 # 3. 數據抓取與計算
 # ---------------------------------------------------------
-@st.cache_data(ttl=10) # 縮短快取時間方便測試
-def get_data(ticker, interval_label, interval_code):
+@st.cache_data(ttl=60)
+def get_clean_data(ticker, interval_label):
     try:
-        if interval_label == "日 K":
-            period = "2y"
-        elif interval_label == "週 K":
-            period = "5y"
-        else:
-            period = "max"
-
-        download_interval = "1mo" if interval_label == "年 K" else interval_code
+        # 1. 下載資料
+        interval = interval_map[interval_label]
+        period = "2y" if interval_label == "日 K" else "max"
+        download_interval = "1mo" if interval_label == "年 K" else interval
+        
         data = yf.download(ticker, period=period, interval=download_interval, progress=False)
         
-        if data.empty:
-            return None
-
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
+        if data.empty: return None
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
-        # 移除時區
+        # 2. 移除時區
         data.index = data.index.tz_localize(None)
-
+        
+        # 3. 年K處理
         if interval_label == "年 K":
-            ohlc_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
-            data = data.resample('YE').agg(ohlc_dict).dropna()
+            data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
 
-        # 計算指標
+        # 4. 嚴格清洗
+        data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        
+        # 5. 計算指標
         data['MA5'] = ta.sma(data['Close'], length=5)
         data['MA10'] = ta.sma(data['Close'], length=10)
         data['MA20'] = ta.sma(data['Close'], length=20)
-        
         bbands = ta.bbands(data['Close'], length=20, std=2)
-        if bbands is not None:
-            data = pd.concat([data, bbands], axis=1)
-        
+        if bbands is not None: data = pd.concat([data, bbands], axis=1)
         macd = ta.macd(data['Close'])
-        if macd is not None:
-            data = pd.concat([data, macd], axis=1)
-        
+        if macd is not None: data = pd.concat([data, macd], axis=1)
         data['RSI'] = ta.rsi(data['Close'], length=14)
-        
         stoch = ta.stoch(data['High'], data['Low'], data['Close'])
-        if stoch is not None:
-            data = pd.concat([data, stoch], axis=1)
-            
+        if stoch is not None: data = pd.concat([data, stoch], axis=1)
         data['OBV'] = ta.obv(data['Close'], data['Volume'])
         data['BIAS'] = (data['Close'] - data['MA20']) / data['MA20'] * 100
         
         data = data.reset_index()
         data.columns = [col.lower() for col in data.columns]
         
-        # 統一日期格式
+        # 6. 轉換為 Unix Timestamp
         if 'date' in data.columns:
-            data['date_str'] = data['date'].dt.strftime('%Y-%m-%d')
+            data['time'] = data['date'].astype('int64') // 10**9
         elif 'index' in data.columns:
-            data['date_str'] = data['index'].dt.strftime('%Y-%m-%d')
+            data['time'] = data['index'].astype('int64') // 10**9
             
         return data
     except Exception as e:
-        st.error(f"數據錯誤: {e}")
+        st.error(f"Error: {e}")
         return None
 
-df = get_data(ticker, selected_interval_label, interval)
+df = get_clean_data(ticker, selected_interval_label)
 
 if df is None or df.empty:
-    st.error("無數據")
+    st.error("無資料")
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 圖表配置 (核彈級拆解法)
+# 4. 數據打包 (顏色邏輯與標籤優化)
 # ---------------------------------------------------------
-# 我們不把所有資料塞在同一個字典，而是拆成獨立的 List
-# 這樣可以避開所有 "Key Error" 或 "None" 的問題
+# 定義顏色
+COLOR_UP = '#FF5252'    # 漲 (紅)
+COLOR_DOWN = '#00B746'  # 跌 (綠)
 
-candlestick_data = []
-volume_data = []
-ma5_data = []
-ma10_data = []
-ma20_data = []
-bbu_data = []
-bbl_data = []
-macd_dif_data = []
-macd_dea_data = []
-macd_hist_data = []
-k_data = []
-d_data = []
-rsi_data = []
-obv_data = []
-bias_data = []
+def is_safe(val):
+    if val is None: return False
+    if pd.isna(val): return False
+    if np.isinf(val): return False
+    return True
 
-# 安全轉型函數
-def is_valid(val):
-    return val is not None and not pd.isna(val)
+candles = []
+vols = []
+ma5, ma10, ma20 = [], [], []
+bbu, bbl = [], []
+macd_dif, macd_dea, macd_hist = [], [], []
+k_line, d_line, rsi_line, obv_line, bias_line = [], [], [], [], []
 
-for index, row in df.iterrows():
-    time_str = row['date_str']
+for _, row in df.iterrows():
+    t = int(row['time'])
     
-    # 1. 基礎 K 線 (如果沒有價格，這一行就跳過)
-    if is_valid(row['open']) and is_valid(row['close']):
-        candlestick_data.append({
-            'time': time_str,
-            'open': float(row['open']),
-            'high': float(row['high']),
-            'low': float(row['low']),
-            'close': float(row['close']),
+    # K線
+    if is_safe(row['open']) and is_safe(row['close']):
+        candles.append({
+            'time': t, 
+            'open': float(row['open']), 'high': float(row['high']), 
+            'low': float(row['low']), 'close': float(row['close'])
         })
         
-    # 2. 成交量
-    if is_valid(row['volume']):
-        volume_data.append({'time': time_str, 'value': float(row['volume'])})
-        
-    # 3. 均線 (如果不夠天數算出來是 NaN，我們就不要加入 List)
-    if is_valid(row.get('ma5')): ma5_data.append({'time': time_str, 'value': float(row['ma5'])})
-    if is_valid(row.get('ma10')): ma10_data.append({'time': time_str, 'value': float(row['ma10'])})
-    if is_valid(row.get('ma20')): ma20_data.append({'time': time_str, 'value': float(row['ma20'])})
+        # 【牛牛風格成交量】: 漲紅跌綠
+        if is_safe(row['volume']):
+            vol_color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
+            vols.append({'time': t, 'value': float(row['volume']), 'color': vol_color})
+            
+    # 指標
+    if is_safe(row.get('ma5')): ma5.append({'time': t, 'value': float(row['ma5'])})
+    if is_safe(row.get('ma10')): ma10.append({'time': t, 'value': float(row['ma10'])})
+    if is_safe(row.get('ma20')): ma20.append({'time': t, 'value': float(row['ma20'])})
     
-    # 4. 布林
-    if is_valid(row.get('bbu_20_2.0')): bbu_data.append({'time': time_str, 'value': float(row['bbu_20_2.0'])})
-    if is_valid(row.get('bbl_20_2.0')): bbl_data.append({'time': time_str, 'value': float(row['bbl_20_2.0'])})
+    if is_safe(row.get('bbu_20_2.0')): bbu.append({'time': t, 'value': float(row['bbu_20_2.0'])})
+    if is_safe(row.get('bbl_20_2.0')): bbl.append({'time': t, 'value': float(row['bbl_20_2.0'])})
+    
+    if is_safe(row.get('macd_12_26_9')): macd_dif.append({'time': t, 'value': float(row['macd_12_26_9'])})
+    if is_safe(row.get('macds_12_26_9')): macd_dea.append({'time': t, 'value': float(row['macds_12_26_9'])})
+    if is_safe(row.get('macdh_12_26_9')): macd_hist.append({'time': t, 'value': float(row['macdh_12_26_9']), 'color': COLOR_UP if row.get('macdh_12_26_9') > 0 else COLOR_DOWN})
+    
+    if is_safe(row.get('stochk_14_3_3')): k_line.append({'time': t, 'value': float(row['stochk_14_3_3'])})
+    if is_safe(row.get('stochd_14_3_3')): d_line.append({'time': t, 'value': float(row['stochd_14_3_3'])})
+    if is_safe(row.get('rsi')): rsi_line.append({'time': t, 'value': float(row['rsi'])})
+    if is_safe(row.get('obv')): obv_line.append({'time': t, 'value': float(row['obv'])})
+    if is_safe(row.get('bias')): bias_line.append({'time': t, 'value': float(row['bias'])})
 
-    # 5. MACD
-    if is_valid(row.get('macd_12_26_9')): macd_dif_data.append({'time': time_str, 'value': float(row['macd_12_26_9'])})
-    if is_valid(row.get('macds_12_26_9')): macd_dea_data.append({'time': time_str, 'value': float(row['macds_12_26_9'])})
-    if is_valid(row.get('macdh_12_26_9')): macd_hist_data.append({'time': time_str, 'value': float(row['macdh_12_26_9'])})
-
-    # 6. KD, RSI, OBV, BIAS
-    if is_valid(row.get('stochk_14_3_3')): k_data.append({'time': time_str, 'value': float(row['stochk_14_3_3'])})
-    if is_valid(row.get('stochd_14_3_3')): d_data.append({'time': time_str, 'value': float(row['stochd_14_3_3'])})
-    if is_valid(row.get('rsi')): rsi_data.append({'time': time_str, 'value': float(row['rsi'])})
-    if is_valid(row.get('obv')): obv_data.append({'time': time_str, 'value': float(row['obv'])})
-    if is_valid(row.get('bias')): bias_data.append({'time': time_str, 'value': float(row['bias'])})
-
-
-# 圖表設定
+# ---------------------------------------------------------
+# 5. 渲染圖表配置 (標籤與標題設定)
+# ---------------------------------------------------------
 chartOptions = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
     "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
-    "crosshair": { "mode": 1 },
-    "rightPriceScale": { "borderColor": "#E0E0E0" },
-    "timeScale": { "borderColor": "#E0E0E0" }
+    "rightPriceScale": { "borderColor": "#E0E0E0", "scaleMargins": {"top": 0.1, "bottom": 0.1} },
+    "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True }
 }
 
-# 顏色定義
-COLOR_UP = '#FF5252'
-COLOR_DOWN = '#00B746'
-
-series = [
-    # 主圖
+series_config = [
     {
         "type": "Candlestick",
-        "data": candlestick_data, # 直接餵入獨立的 List
+        "data": candles,
         "options": {
             "upColor": COLOR_UP, "downColor": COLOR_DOWN,
             "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN,
             "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN
         }
-    },
-    {"type": "Line", "data": ma5_data, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5"}},
-    {"type": "Line", "data": ma10_data, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10"}},
-    {"type": "Line", "data": ma20_data, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20"}},
-    {"type": "Line", "data": bbu_data, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2}},
-    {"type": "Line", "data": bbl_data, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2}},
-    
-    # 成交量
-    {"type": "Histogram", "data": volume_data, "options": {"color": "#26a69a", "priceFormat": {"type": "volume"}, "priceScaleId": "volume"}},
-    
-    # MACD
-    {"type": "Line", "data": macd_dif_data, "options": {"color": "#2962FF", "lineWidth": 1, "priceScaleId": "macd"}},
-    {"type": "Line", "data": macd_dea_data, "options": {"color": "#FF6D00", "lineWidth": 1, "priceScaleId": "macd"}},
-    {"type": "Histogram", "data": macd_hist_data, "options": {"color": "#26a69a", "priceScaleId": "macd"}},
-    
-    # KD
-    {"type": "Line", "data": k_data, "options": {"color": "#E91E63", "priceScaleId": "kdj"}},
-    {"type": "Line", "data": d_data, "options": {"color": "#2196F3", "priceScaleId": "kdj"}},
-    
-    # RSI
-    {"type": "Line", "data": rsi_data, "options": {"color": "#9C27B0", "priceScaleId": "rsi"}},
-    
-    # OBV
-    {"type": "Line", "data": obv_data, "options": {"color": "#FF9800", "priceScaleId": "obv"}},
-    
-    # Bias
-    {"type": "Line", "data": bias_data, "options": {"color": "#607D8B", "priceScaleId": "bias"}},
+    }
 ]
 
-st.markdown("### 技術分析圖表")
-renderLightweightCharts([
-    {"chart": chartOptions, "series": series[:6], "height": 400},
-    {"chart": chartOptions, "series": [series[6]], "height": 100},
-    {"chart": chartOptions, "series": series[7:10], "height": 150},
-    {"chart": chartOptions, "series": series[10:12], "height": 100},
-    {"chart": chartOptions, "series": [series[12]], "height": 100},
-    {"chart": chartOptions, "series": [series[13]], "height": 100},
-    {"chart": chartOptions, "series": [series[14]], "height": 100},
-], key="multi_pane_chart_v2") # 改 key 強制刷新
+# 加入均線 (關鍵修改：lastValueVisible=False 隱藏Y軸標籤，避免擋住K棒)
+if ma5: series_config.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "lastValueVisible": False, "priceLineVisible": False}})
+if ma10: series_config.append({"type": "Line", "data": ma10, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10", "lastValueVisible": False, "priceLineVisible": False}})
+if ma20: series_config.append({"type": "Line", "data": ma20, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20", "lastValueVisible": False, "priceLineVisible": False}})
+
+if bbu: series_config.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
+if bbl: series_config.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
+
+# 副圖配置 (確保 title 都有設定)
+vol_series = [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "成交量 (Vol)"}}] if vols else []
+
+macd_series = []
+if macd_dif: macd_series.append({"type": "Line", "data": macd_dif, "options": {"color": "#2962FF", "lineWidth": 1, "title": "DIF"}})
+if macd_dea: macd_series.append({"type": "Line", "data": macd_dea, "options": {"color": "#FF6D00", "lineWidth": 1, "title": "DEA"}})
+if macd_hist: macd_series.append({"type": "Histogram", "data": macd_hist, "options": {"title": "MACD"}})
+
+kdj_series = []
+if k_line: kdj_series.append({"type": "Line", "data": k_line, "options": {"color": "#E91E63", "title": "K"}})
+if d_line: kdj_series.append({"type": "Line", "data": d_line, "options": {"color": "#2196F3", "title": "D"}})
+
+rsi_series = [{"type": "Line", "data": rsi_line, "options": {"color": "#9C27B0", "title": "RSI (14)"}}] if rsi_line else []
+obv_series = [{"type": "Line", "data": obv_line, "options": {"color": "#FF9800", "title": "OBV"}}] if obv_line else []
+bias_series = [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "乖離率 (Bias)"}}] if bias_line else []
+
+# 組合面板
+panes = [
+    {"chart": chartOptions, "series": series_config, "height": 400},
+]
+if vol_series: panes.append({"chart": chartOptions, "series": vol_series, "height": 100})
+if macd_series: panes.append({"chart": chartOptions, "series": macd_series, "height": 150})
+if kdj_series: panes.append({"chart": chartOptions, "series": kdj_series, "height": 100})
+if rsi_series: panes.append({"chart": chartOptions, "series": rsi_series, "height": 100})
+if obv_series: panes.append({"chart": chartOptions, "series": obv_series, "height": 100})
+if bias_series: panes.append({"chart": chartOptions, "series": bias_series, "height": 100})
+
+st.markdown("### 📊 技術分析圖表")
+if len(candles) > 0:
+    renderLightweightCharts(panes, key="final_chart_v3")
+else:
+    st.error("嚴重錯誤：沒有可用的 K 線數據。請檢查股票代碼是否正確。")
