@@ -17,7 +17,7 @@ st.subheader("台美股專業看盤 (仿富途牛牛 - 亮色版)")
 st.sidebar.header("股票設定")
 
 # 市場與代碼
-market_mode = st.sidebar.radio("選擇市場", options=["台股 (上市)", "台股 (上櫃)", "美股/其他"], index=2) # 預設改為美股方便測試
+market_mode = st.sidebar.radio("選擇市場", options=["台股 (上市)", "台股 (上櫃)", "美股/其他"], index=2)
 raw_symbol = st.sidebar.text_input("輸入代碼", value="MU")
 
 # K 棒週期對照表
@@ -42,7 +42,7 @@ else:
 st.sidebar.caption(f"查詢代碼: {ticker}")
 
 # ---------------------------------------------------------
-# 3. 數據抓取與計算 (強力修復版)
+# 3. 數據抓取與計算
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, interval_label, interval_code):
@@ -55,27 +55,25 @@ def get_data(ticker, interval_label, interval_code):
         else:
             period = "max"
 
-        # 下載資料
         download_interval = "1mo" if interval_label == "年 K" else interval_code
         data = yf.download(ticker, period=period, interval=download_interval, progress=False)
         
         if data.empty:
             return None
 
-        # --- 【修復 1】處理 MultiIndex 與時區 ---
-        # 如果欄位是多層索引 (Price, Ticker)，只取第一層 (Price)
+        # 處理 MultiIndex 與時區
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
         
-        # 移除時區 (最關鍵的一步，解決空白圖表的元兇)
+        # 【關鍵修復】移除時區資訊，避免圖表錯亂
         data.index = data.index.tz_localize(None)
 
-        # --- 【修復 2】年 K 線重算 ---
+        # 年 K 線重算
         if interval_label == "年 K":
             ohlc_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
             data = data.resample('YE').agg(ohlc_dict).dropna()
 
-        # --- 核心指標計算 ---
+        # 指標計算
         data['MA5'] = ta.sma(data['Close'], length=5)
         data['MA10'] = ta.sma(data['Close'], length=10)
         data['MA20'] = ta.sma(data['Close'], length=20)
@@ -99,10 +97,9 @@ def get_data(ticker, interval_label, interval_code):
         
         # 格式整理
         data = data.reset_index()
-        # 統一欄位名稱為小寫 (open, high, low...)
         data.columns = [col.lower() for col in data.columns]
         
-        # 確保有 date_str 欄位
+        # 確保日期字串存在
         if 'date' in data.columns:
             data['date_str'] = data['date'].dt.strftime('%Y-%m-%d')
         elif 'index' in data.columns:
@@ -113,27 +110,25 @@ def get_data(ticker, interval_label, interval_code):
         st.error(f"數據處理錯誤: {e}")
         return None
 
-# 執行抓取
 df = get_data(ticker, selected_interval_label, interval)
 
-# --- Debug 區塊：如果圖表還是空的，打開這個看看有沒有資料 ---
-with st.expander("🛠️ 開發者診斷工具 (點擊展開查看原始數據)"):
+# 開發者診斷工具 (保留著讓你確認數據)
+with st.expander("🛠️ 開發者診斷工具"):
     if df is not None:
-        st.write("前 5 筆數據預覽：", df.head())
+        st.write("數據預覽：", df.head())
     else:
-        st.write("沒有抓到數據 (DataFrame is None)")
+        st.write("無數據")
 
 if df is None or df.empty:
     st.error(f"無法取得代碼 {ticker} 的資料。")
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 圖表配置 (強力轉型版)
+# 4. 圖表配置 (完美修復版)
 # ---------------------------------------------------------
 COLOR_UP = '#FF5252'
 COLOR_DOWN = '#00B746'
 
-# 輔助函式：安全轉型 (處理 None 和 NaN)
 def safe_float(val):
     if val is None or pd.isna(val):
         return None
@@ -141,46 +136,40 @@ def safe_float(val):
 
 chart_data = []
 for index, row in df.iterrows():
-    # --- 【修復 3】強制將 numpy float 轉為 python float ---
-    # JSON 序列化非常挑剔，這裡我們手動一個一個轉，確保萬無一失
+    # 建立基礎 K 線資料
     candle = {
         'time': row['date_str'], 
         'open': safe_float(row['open']), 
         'high': safe_float(row['high']), 
         'low': safe_float(row['low']), 
         'close': safe_float(row['close']),
-        'volume': int(row['volume']) if not pd.isna(row['volume']) else 0,
-        
-        'ma5': safe_float(row.get('ma5')), 
-        'ma10': safe_float(row.get('ma10')), 
-        'ma20': safe_float(row.get('ma20')),
-        
-        'bbu': safe_float(row.get('bbu_20_2.0')), 
-        'bbl': safe_float(row.get('bbl_20_2.0')),
-        
-        'macd': safe_float(row.get('macd_12_26_9')), 
-        'signal': safe_float(row.get('macds_12_26_9')), 
-        'hist': safe_float(row.get('macdh_12_26_9')),
-        
-        'rsi': safe_float(row.get('rsi')),
-        'k': safe_float(row.get('stochk_14_3_3')), 
-        'd': safe_float(row.get('stochd_14_3_3')),
-        'obv': safe_float(row.get('obv')),
-        'bias': safe_float(row.get('bias'))
+        'volume': float(row['volume']) if not pd.isna(row['volume']) else 0.0
     }
+    
+    # 【核心修復】動態加入指標數據
+    # 只有當數值不是 None 時，才加入字典。避免送出 {'ma5': None} 導致圖表崩潰。
+    indicators = {
+        'ma5': row.get('ma5'), 'ma10': row.get('ma10'), 'ma20': row.get('ma20'),
+        'bbu': row.get('bbu_20_2.0'), 'bbl': row.get('bbl_20_2.0'),
+        'macd': row.get('macd_12_26_9'), 'signal': row.get('macds_12_26_9'), 'hist': row.get('macdh_12_26_9'),
+        'rsi': row.get('rsi'),
+        'k': row.get('stochk_14_3_3'), 'd': row.get('stochd_14_3_3'),
+        'obv': row.get('obv'), 'bias': row.get('bias')
+    }
+    
+    for key, val in indicators.items():
+        val_float = safe_float(val)
+        if val_float is not None:
+            candle[key] = val_float
+            
     chart_data.append(candle)
 
-# 圖表外觀設定
 chartOptions = {
-    "layout": {
-        "backgroundColor": "#FFFFFF", "textColor": "#333333"
-    },
-    "grid": {
-        "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"}
-    },
-    "crosshair": {"mode": 1},
-    "rightPriceScale": {"borderColor": "#E0E0E0"},
-    "timeScale": {"borderColor": "#E0E0E0"}
+    "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
+    "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
+    "crosshair": { "mode": 1 },
+    "rightPriceScale": { "borderColor": "#E0E0E0" },
+    "timeScale": { "borderColor": "#E0E0E0" }
 }
 
 series = [
