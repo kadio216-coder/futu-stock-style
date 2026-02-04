@@ -22,7 +22,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (演算法升級：MA 改用 EMA)
+# 2. 資料層 (保持 V6.7 的 EMA 與 手動布林)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -43,18 +43,15 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # --- 【關鍵修改】均線改用 EMA (指數移動平均) ---
-        # EMA 對價格反應更快，這會導致 MA20 (EMA) 與 布林中軌 (SMA) 出現明顯的 "剪刀差"
-        # 這就是你要的「分開」效果！
+        # --- 均線 (EMA) ---
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
-        data['MA20'] = ta.ema(data[close_col], length=20) # 這是 EMA
+        data['MA20'] = ta.ema(data[close_col], length=20)
         data['MA60'] = ta.ema(data[close_col], length=60)
         
-        # --- 布林通道 (維持標準 SMA) ---
-        # 中軌 = SMA 20 (使用典型價格，讓差異更明顯)
+        # --- 布林通道 (典型價格 SMA) ---
         data['tp'] = (data['high'] + data['low'] + data[close_col]) / 3
-        data['boll_mid'] = data['tp'].rolling(window=20).mean() # 這是 SMA
+        data['boll_mid'] = data['tp'].rolling(window=20).mean()
         data['boll_std'] = data['tp'].rolling(window=20).std()
         
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
@@ -72,7 +69,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
-        # 日期偵測
+        # 日期處理
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -116,7 +113,7 @@ col_main, col_tools = st.columns([0.82, 0.18])
 with col_tools:
     st.markdown("#### ⚙️ 指標")
     st.caption("主圖")
-    show_ma = st.checkbox("MA (EMA)", value=True) # 標註這是 EMA
+    show_ma = st.checkbox("MA (EMA)", value=True)
     show_boll = st.checkbox("BOLL", value=True)
     
     st.divider()
@@ -172,6 +169,8 @@ with col_main:
             candles.append({'time': t, 'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']})
         else: continue
 
+        # 這裡不管有沒有勾選，我們都先算出數據
+        # (其實在 Python 層過濾會更快，但為了邏輯簡單先這樣)
         if show_vol:
             v = row['volume'] if is_valid(row['volume']) else 0
             color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
@@ -222,7 +221,6 @@ with col_main:
     ]
     
     if show_ma:
-        # 標題改為 EMA 提示用戶
         if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "EMA5", "priceLineVisible": False, "lastValueVisible": False}})
         if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#2196F3', "lineWidth": 1, "title": "EMA10", "priceLineVisible": False, "lastValueVisible": False}})
         if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "EMA20", "priceLineVisible": False, "lastValueVisible": False}})
@@ -265,7 +263,11 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v67_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
+    # --- 【關鍵修改】穩定 Key ---
+    # 這裡我們只放 ticker, interval, date_range。
+    # 移除了所有的 show_xxx 變數。
+    # 這樣當你勾選/取消指標時，Key 不會變，Streamlit 就不會重置圖表，而是在原圖上更新。
+    st_key = f"desk_v70_{ticker}_{interval_label}_{start_date}_{end_date}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
