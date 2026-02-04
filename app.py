@@ -7,18 +7,17 @@ from datetime import datetime, timedelta
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ---------------------------------------------------------
-# 1. 頁面設定 (模擬桌面軟體佈局)
+# 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Desktop Replica")
 
-# CSS 優化：讓 Checkbox 更緊湊，減少右側留白
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 1rem; padding-left: 1rem; padding-right: 1rem;}
     h3 {margin-bottom: 0px;}
     .stRadio > div {flex-direction: row;} 
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
-    div.stCheckbox {margin-bottom: -10px;} /* 縮小勾選框間距 */
+    div.stCheckbox {margin-bottom: -10px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,6 +45,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['MA20'] = ta.sma(data['Close'], length=20)
         data['MA60'] = ta.sma(data['Close'], length=60)
         
+        # 布林通道 (長度20, 標準差2)
         bbands = ta.bbands(data['Close'], length=20, std=2)
         if bbands is not None: data = pd.concat([data, bbands], axis=1)
         
@@ -86,7 +86,6 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
 
-# 主畫面切分 [82% 圖表, 18% 控制面板] - 稍微調寬一點右邊，避免文字折行
 col_main, col_tools = st.columns([0.82, 0.18])
 
 # ---------------------------------------------------------
@@ -96,7 +95,7 @@ with col_tools:
     st.markdown("#### ⚙️ 指標")
     st.caption("主圖")
     show_ma = st.checkbox("MA 均線", value=True)
-    show_boll = st.checkbox("BOLL 布林", value=False)
+    show_boll = st.checkbox("BOLL 布林", value=True) # 預設開啟方便測試
     
     st.divider()
     st.caption("副圖")
@@ -127,7 +126,7 @@ with col_main:
         st.error("無數據，請檢查代碼")
         st.stop()
         
-    # 日期滑桿 (放在主圖上方)
+    # 日期滑桿
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     default_start = max_d - timedelta(days=365)
     if default_start < min_d: default_start = min_d
@@ -151,12 +150,10 @@ with col_main:
 
     for _, row in df.iterrows():
         t = int(row['time'])
-        # K線必填
         if is_valid(row['open']):
             candles.append({'time': t, 'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']})
-        else: continue # 沒K線就跳過這天
+        else: continue
 
-        # 只處理被勾選的指標 (優化效能)
         if show_vol:
             v = row['volume'] if is_valid(row['volume']) else 0
             color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
@@ -169,19 +166,16 @@ with col_main:
             if is_valid(row.get('ma60')): ma60.append({'time': t, 'value': row['ma60']})
             
         if show_boll:
+            # 確保 key 名稱正確 (pandas_ta 產生的欄位是 bbu_20_2.0 和 bbl_20_2.0)
             if is_valid(row.get('bbu_20_2.0')): bbu.append({'time': t, 'value': row['bbu_20_2.0']})
             if is_valid(row.get('bbl_20_2.0')): bbl.append({'time': t, 'value': row['bbl_20_2.0']})
 
         if show_macd:
             if is_valid(row.get('macd_12_26_9')): macd_dif.append({'time': t, 'value': row['macd_12_26_9']})
             if is_valid(row.get('macds_12_26_9')): macd_dea.append({'time': t, 'value': row['macds_12_26_9']})
-            
-            # MACD 柱狀圖特殊處理
             if is_valid(row.get('macdh_12_26_9')): 
                 h = row['macdh_12_26_9']
                 macd_hist.append({'time': t, 'value': h, 'color': COLOR_UP if h > 0 else COLOR_DOWN})
-            else:
-                macd_hist.append({'time': t}) # 佔位符
         
         if show_kdj:
             if is_valid(row.get('stochk_14_3_3')): k_line.append({'time': t, 'value': row['stochk_14_3_3']})
@@ -215,9 +209,30 @@ with col_main:
         if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "MA20", "priceLineVisible": False, "lastValueVisible": False}})
         if ma60: series_main.append({"type": "Line", "data": ma60, "options": {"color": '#00E676', "lineWidth": 1, "title": "MA60", "priceLineVisible": False, "lastValueVisible": False}})
     
+    # 【修復】布林線設定：使用深藍色，lineStyle: 2 (虛線)
     if show_boll:
-        if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False}})
-        if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False}})
+        if bbu: series_main.append({
+            "type": "Line", 
+            "data": bbu, 
+            "options": {
+                "color": "#2962FF",   # 深藍色，保證看得到
+                "lineWidth": 1, 
+                "lineStyle": 2,       # 2 = 虛線 (Dashed)
+                "lastValueVisible": False,
+                "priceLineVisible": False
+            }
+        })
+        if bbl: series_main.append({
+            "type": "Line", 
+            "data": bbl, 
+            "options": {
+                "color": "#2962FF",   # 深藍色
+                "lineWidth": 1, 
+                "lineStyle": 2,       # 2 = 虛線
+                "lastValueVisible": False,
+                "priceLineVisible": False
+            }
+        })
         
     panes.append({"chart": common_opts, "series": series_main, "height": 500})
     
@@ -251,9 +266,8 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    # --- 渲染 (關鍵修正) ---
-    # 將所有狀態都加入 Key，確保任何變動都會觸發完整的重新渲染
-    st_key = f"desk_v61_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
+    # 渲染
+    st_key = f"desk_v62_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
