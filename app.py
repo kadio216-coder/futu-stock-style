@@ -22,7 +22,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (導入典型價格 Typical Price)
+# 2. 資料層 (演算法升級：MA 改用 EMA)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -43,19 +43,19 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # --- 標準 MA 計算 (使用收盤價) ---
-        data['MA5'] = ta.sma(data[close_col], length=5)
-        data['MA10'] = ta.sma(data[close_col], length=10)
-        data['MA20'] = ta.sma(data[close_col], length=20)
-        data['MA60'] = ta.sma(data[close_col], length=60)
+        # --- 【關鍵修改】均線改用 EMA (指數移動平均) ---
+        # EMA 對價格反應更快，這會導致 MA20 (EMA) 與 布林中軌 (SMA) 出現明顯的 "剪刀差"
+        # 這就是你要的「分開」效果！
+        data['MA5'] = ta.ema(data[close_col], length=5)
+        data['MA10'] = ta.ema(data[close_col], length=10)
+        data['MA20'] = ta.ema(data[close_col], length=20) # 這是 EMA
+        data['MA60'] = ta.ema(data[close_col], length=60)
         
-        # --- 【關鍵修改】布林通道計算 ---
-        # 改用「典型價格 (Typical Price)」 = (High + Low + Close) / 3
-        # 這會讓布林中軌跟 MA20 (純 Close) 產生微小的差異，從而「分開」顯示
+        # --- 布林通道 (維持標準 SMA) ---
+        # 中軌 = SMA 20 (使用典型價格，讓差異更明顯)
         data['tp'] = (data['high'] + data['low'] + data[close_col]) / 3
-        
-        data['boll_mid'] = data['tp'].rolling(window=20).mean() # 中軌用 TP 算
-        data['boll_std'] = data['tp'].rolling(window=20).std()  # 標準差也用 TP 算
+        data['boll_mid'] = data['tp'].rolling(window=20).mean() # 這是 SMA
+        data['boll_std'] = data['tp'].rolling(window=20).std()
         
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
@@ -72,7 +72,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
-        # 日期處理
+        # 日期偵測
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -116,8 +116,8 @@ col_main, col_tools = st.columns([0.82, 0.18])
 with col_tools:
     st.markdown("#### ⚙️ 指標")
     st.caption("主圖")
-    show_ma = st.checkbox("MA 均線", value=True)
-    show_boll = st.checkbox("BOLL 布林", value=True)
+    show_ma = st.checkbox("MA (EMA)", value=True) # 標註這是 EMA
+    show_boll = st.checkbox("BOLL", value=True)
     
     st.divider()
     st.caption("副圖")
@@ -222,13 +222,13 @@ with col_main:
     ]
     
     if show_ma:
-        if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#2196F3', "lineWidth": 1, "title": "MA10", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "MA20", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma60: series_main.append({"type": "Line", "data": ma60, "options": {"color": '#00E676', "lineWidth": 1, "title": "MA60", "priceLineVisible": False, "lastValueVisible": False}})
+        # 標題改為 EMA 提示用戶
+        if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "EMA5", "priceLineVisible": False, "lastValueVisible": False}})
+        if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#2196F3', "lineWidth": 1, "title": "EMA10", "priceLineVisible": False, "lastValueVisible": False}})
+        if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "EMA20", "priceLineVisible": False, "lastValueVisible": False}})
+        if ma60: series_main.append({"type": "Line", "data": ma60, "options": {"color": '#00E676', "lineWidth": 1, "title": "EMA60", "priceLineVisible": False, "lastValueVisible": False}})
     
     if show_boll:
-        # 使用深藍色、虛線，與 MA 線區分開來
         if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "BBU", "lastValueVisible": False, "priceLineVisible": False}})
         if bbm: series_main.append({"type": "Line", "data": bbm, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "MID", "lastValueVisible": False, "priceLineVisible": False}})
         if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "BBL", "lastValueVisible": False, "priceLineVisible": False}})
@@ -265,7 +265,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v66_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
+    st_key = f"desk_v67_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
