@@ -9,7 +9,7 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股專業看盤 (仿富途牛牛 - V4.2 OBV修正版)")
+st.subheader("台美股專業看盤 (仿富途牛牛 - V4.3 絕對像素對齊版)")
 
 # ---------------------------------------------------------
 # 2. 側邊欄設定
@@ -118,7 +118,7 @@ for _, row in df.iterrows():
             'low': float(row['low']), 'close': float(row['close'])
         })
     else:
-        continue 
+        continue
 
     if is_safe(row['volume']):
         bar_color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
@@ -126,6 +126,7 @@ for _, row in df.iterrows():
     else:
         vols.append({'time': t, 'value': 0, 'color': 'rgba(0,0,0,0)'})
 
+    # 確保每個列表都有相同的長度 (補齊空白)
     ma5.append({'time': t, 'value': float(row['ma5'])} if is_safe(row.get('ma5')) else {'time': t})
     ma10.append({'time': t, 'value': float(row['ma10'])} if is_safe(row.get('ma10')) else {'time': t})
     ma20.append({'time': t, 'value': float(row['ma20'])} if is_safe(row.get('ma20')) else {'time': t})
@@ -151,27 +152,34 @@ for _, row in df.iterrows():
 
 
 # ---------------------------------------------------------
-# 5. 渲染圖表
+# 5. 渲染圖表 (像素級對齊核心設定)
 # ---------------------------------------------------------
 common_chart_options = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
     "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
+    # 【核心修改 1】強制右側寬度固定為 120px (非常寬，絕對夠放任何數字)
     "rightPriceScale": { 
         "borderColor": "#E0E0E0", 
         "scaleMargins": {"top": 0.1, "bottom": 0.1},
-        "minimumWidth": 80, 
+        "minimumWidth": 120, 
         "visible": True,
     },
+    # 【核心修改 2】完全隱藏左側軸，避免干擾
     "leftPriceScale": { "visible": False },
-    "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True },
+    # 【核心修改 3】固定右側偏移量，確保 K 線起始點一致
+    "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True, "rightOffset": 12 },
     "handleScroll": { "vertTouchDrag": False }
 }
 
+# 格式設定
 format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
-# 【關鍵修改】OBV 使用 "volume" 格式 (例如 113M)，縮短數字長度
 format_volume = {"type": "volume"} 
 
-series_config = [
+# --- 構建所有面板 (Panes) ---
+panes = []
+
+# Pane 0: K 線主圖
+series_main = [
     {
         "type": "Candlestick",
         "data": candles,
@@ -182,38 +190,41 @@ series_config = [
         }
     }
 ]
+if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "lastValueVisible": False, "priceLineVisible": False}})
+if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10", "lastValueVisible": False, "priceLineVisible": False}})
+if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20", "lastValueVisible": False, "priceLineVisible": False}})
+if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
+if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
 
-if ma5: series_config.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "lastValueVisible": False, "priceLineVisible": False}})
-if ma10: series_config.append({"type": "Line", "data": ma10, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10", "lastValueVisible": False, "priceLineVisible": False}})
-if ma20: series_config.append({"type": "Line", "data": ma20, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20", "lastValueVisible": False, "priceLineVisible": False}})
+panes.append({"chart": common_chart_options, "series": series_main, "height": 400})
 
-if bbu: series_config.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
-if bbl: series_config.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
-
-panes = [{"chart": common_chart_options, "series": series_config, "height": 400}]
-
+# Pane 1: 成交量
 if vols: panes.append({"chart": common_chart_options, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "成交量 (Vol)"}}], "height": 100})
 
+# Pane 2: MACD
 macd_series = []
 if macd_dif: macd_series.append({"type": "Line", "data": macd_dif, "options": {"color": "#2962FF", "lineWidth": 1, "title": "DIF", "priceFormat": format_2f}})
 if macd_dea: macd_series.append({"type": "Line", "data": macd_dea, "options": {"color": "#FF6D00", "lineWidth": 1, "title": "DEA", "priceFormat": format_2f}})
 if macd_hist: macd_series.append({"type": "Histogram", "data": macd_hist, "options": {"title": "MACD", "priceFormat": format_2f}})
 if macd_series: panes.append({"chart": common_chart_options, "series": macd_series, "height": 150})
 
+# Pane 3: KDJ
 kdj_series = []
 if k_line: kdj_series.append({"type": "Line", "data": k_line, "options": {"color": "#E91E63", "title": "K", "priceFormat": format_2f}})
 if d_line: kdj_series.append({"type": "Line", "data": d_line, "options": {"color": "#2196F3", "title": "D", "priceFormat": format_2f}})
 if kdj_series: panes.append({"chart": common_chart_options, "series": kdj_series, "height": 100})
 
+# Pane 4: RSI
 if rsi_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": rsi_line, "options": {"color": "#9C27B0", "title": "RSI(14)", "priceFormat": format_2f}}], "height": 100})
 
-# 【OBV 修正】加入 priceFormat: format_volume
+# Pane 5: OBV (格式為 Volume)
 if obv_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": obv_line, "options": {"color": "#FF9800", "title": "OBV", "priceFormat": format_volume}}], "height": 100})
 
+# Pane 6: Bias
 if bias_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "乖離率", "priceFormat": format_2f}}], "height": 100})
 
 st.markdown("### 📊 技術分析圖表")
 if len(candles) > 0:
-    renderLightweightCharts(panes, key="final_v4_2_obv_fix")
+    renderLightweightCharts(panes, key="final_v4_3_pixel_perfect")
 else:
     st.error("錯誤：無數據")
