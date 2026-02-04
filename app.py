@@ -3,13 +3,14 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
 import numpy as np
+import json
 from datetime import datetime, timedelta
-from streamlit_lightweight_charts import renderLightweightCharts
+import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica")
+st.set_page_config(layout="wide", page_title="Futu Desktop JS-Engine")
 
 st.markdown("""
 <style>
@@ -22,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (包含日期 KeyError 修復 & 專業指標算法)
+# 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -43,7 +44,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # --- 指標 (EMA & TP-Boll) ---
+        # 指標計算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -63,29 +64,25 @@ def get_data(ticker, period="2y", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
-        # --- 日期處理 (KeyError 修復) ---
+        # 日期處理
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
         date_col = None
         for name in ['date', 'datetime', 'timestamp', 'index']:
             if name in data.columns:
-                date_col = name
-                break
+                date_col = name; break
         if date_col is None:
             for col in data.columns:
                 if pd.api.types.is_datetime64_any_dtype(data[col]):
-                    date_col = col
-                    break
+                    date_col = col; break
         if date_col is None: return None
             
         data['date_obj'] = pd.to_datetime(data[date_col])
-        data['time'] = data['date_obj'].astype('int64') // 10**9
+        data['time'] = data['date_obj'].astype('int64') # JS 需要秒數或毫秒，這裡轉秒
             
         return data
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
+    except: return None
 
 # ---------------------------------------------------------
 # 3. 佈局架構
@@ -98,7 +95,7 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
 
-col_main, col_tools = st.columns([0.82, 0.18])
+col_main, col_tools = st.columns([0.85, 0.15])
 
 with col_tools:
     st.markdown("#### ⚙️ 指標")
@@ -120,148 +117,244 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "年K": "1y"}
-    # 這裡我們抓取「最大範圍」的數據，不要被滑桿切斷，確保計算正確
+    # 這裡我們一次抓取最大量的數據，讓 JS 去處理縮放
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
-        st.error(f"無數據: {ticker}")
+        st.error("無數據")
         st.stop()
-        
-    min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
-    default_start = max_d - timedelta(days=365)
-    if default_start < min_d: default_start = min_d
-    
-    # ⭐️ 關鍵：這個滑桿現在是「絕對視角控制器」
-    start_date, end_date = st.slider("", min_d, max_d, (default_start, max_d), format="YYYY-MM-DD", label_visibility="collapsed")
-    
-    # 使用滑桿篩選數據
-    df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
-    if df.empty: st.stop()
 
-    # --- 數據打包 ---
-    COLOR_UP = '#FF5252'
-    COLOR_DOWN = '#00B746'
+    # ---------------------------------------------------------
+    # 4. 數據轉 JSON (給 JavaScript 吃)
+    # ---------------------------------------------------------
+    def to_json_list(df, cols, time_col='time'):
+        res = []
+        for _, row in df.iterrows():
+            item = {'time': int(row[time_col]) // 10**9} # 轉 Unix Timestamp (秒)
+            # 確保數據有效
+            valid = True
+            for k, v in cols.items():
+                val = row.get(v)
+                if val is None or pd.isna(val) or np.isinf(val):
+                    # 如果是 K 線圖缺數據，這筆就不要；如果是指標缺，該指標為 null
+                    if k in ['open', 'close']: valid = False; break
+                    item[k] = None
+                else:
+                    item[k] = float(val)
+            if valid: res.append(item)
+        return json.dumps(res)
+
+    # 準備各個數據包
+    candles_json = to_json_list(full_df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
     
-    def is_valid(val): return val is not None and not pd.isna(val) and not np.isinf(val)
-
-    candles, vols = [], []
-    ma5, ma10, ma20, ma60 = [], [], [], []
-    bbu, bbm, bbl = [], [], [] 
-    macd_dif, macd_dea, macd_hist = [], [], []
-    k_line, d_line, rsi_line, obv_line, bias_line = [], [], [], [], []
-
-    for _, row in df.iterrows():
-        t = int(row['time'])
-        if is_valid(row['open']):
-            candles.append({'time': t, 'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']})
-        else: continue
-
-        # 根據勾選決定是否加入數據 (解決 "全部消失" 的 bug)
-        # 並且只加入有勾選的數據，這樣沒有勾選的就不會佔用記憶體或導致錯誤
-        if show_vol:
-            v = row['volume'] if is_valid(row['volume']) else 0
-            color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
-            vols.append({'time': t, 'value': v, 'color': color})
-            
-        if show_ma:
-            if is_valid(row.get('ma5')): ma5.append({'time': t, 'value': row['ma5']})
-            if is_valid(row.get('ma10')): ma10.append({'time': t, 'value': row['ma10']})
-            if is_valid(row.get('ma20')): ma20.append({'time': t, 'value': row['ma20']})
-            if is_valid(row.get('ma60')): ma60.append({'time': t, 'value': row['ma60']})
-            
-        if show_boll:
-            if is_valid(row.get('boll_upper')): bbu.append({'time': t, 'value': row['boll_upper']})
-            if is_valid(row.get('boll_mid')):   bbm.append({'time': t, 'value': row['boll_mid']})
-            if is_valid(row.get('boll_lower')): bbl.append({'time': t, 'value': row['boll_lower']})
-
-        if show_macd:
-            if is_valid(row.get('macd_12_26_9')): macd_dif.append({'time': t, 'value': row['macd_12_26_9']})
-            if is_valid(row.get('macds_12_26_9')): macd_dea.append({'time': t, 'value': row['macds_12_26_9']})
-            if is_valid(row.get('macdh_12_26_9')): 
-                h = row['macdh_12_26_9']
-                macd_hist.append({'time': t, 'value': h, 'color': COLOR_UP if h > 0 else COLOR_DOWN})
-        
-        if show_kdj:
-            if is_valid(row.get('stochk_14_3_3')): k_line.append({'time': t, 'value': row['stochk_14_3_3']})
-            if is_valid(row.get('stochd_14_3_3')): d_line.append({'time': t, 'value': row['stochd_14_3_3']})
-            
-        if show_rsi and is_valid(row.get('rsi')): rsi_line.append({'time': t, 'value': row['rsi']})
-        if show_obv and is_valid(row.get('obv')): obv_line.append({'time': t, 'value': row['obv']})
-        if show_bias and is_valid(row.get('bias')): bias_line.append({'time': t, 'value': row['bias']})
-
-    # --- 圖表配置 ---
-    common_opts = {
-        "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
-        "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
-        "rightPriceScale": { "borderColor": "#E0E0E0", "visible": True, "minimumWidth": 85 },
-        "leftPriceScale": { "visible": False },
-        "timeScale": { 
-            "borderColor": "#E0E0E0", 
-            "rightOffset": 5,
-            # 這裡雖然不能強制鎖定 mouse zoom，但我們的資料源 df 已經被 slider 鎖定了
-            # 所以只要圖表重繪，它顯示的範圍永遠是 slider 指定的範圍
-        },
-        "handleScroll": { "mouseWheel": True, "pressedMouseMove": True },
-        "handleScale": { "axisPressedMouseMove": True, "mouseWheel": True }
-    }
+    # 為了節省傳輸量，只打包勾選的數據
+    vol_json = to_json_list(full_df, {'value':'volume'}) if show_vol else "[]"
     
-    panes = []
-    
-    # 1. 主圖
-    series_main = [
-        {"type": "Candlestick", "data": candles, "options": {"upColor": COLOR_UP, "downColor": COLOR_DOWN, "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN, "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN}}
-    ]
-    
+    # MA
+    ma_json = "[]"
     if show_ma:
-        if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "EMA5", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#2196F3', "lineWidth": 1, "title": "EMA10", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "EMA20", "priceLineVisible": False, "lastValueVisible": False}})
-        if ma60: series_main.append({"type": "Line", "data": ma60, "options": {"color": '#00E676', "lineWidth": 1, "title": "EMA60", "priceLineVisible": False, "lastValueVisible": False}})
-    
+        ma_cols = {}
+        if 'ma5' in full_df.columns: ma_cols['ma5'] = 'ma5'
+        if 'ma10' in full_df.columns: ma_cols['ma10'] = 'ma10'
+        if 'ma20' in full_df.columns: ma_cols['ma20'] = 'ma20'
+        if 'ma60' in full_df.columns: ma_cols['ma60'] = 'ma60'
+        ma_json = to_json_list(full_df, ma_cols)
+
+    # BOLL
+    boll_json = "[]"
     if show_boll:
-        if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "BBU", "priceLineVisible": False, "lastValueVisible": False}})
-        if bbm: series_main.append({"type": "Line", "data": bbm, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "MID", "priceLineVisible": False, "lastValueVisible": False}})
-        if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "#2962FF", "lineWidth": 1, "lineStyle": 2, "title": "BBL", "priceLineVisible": False, "lastValueVisible": False}})
-        
-    panes.append({"chart": common_opts, "series": series_main, "height": 500})
-    
-    # 2. 副圖 (只在有勾選時才加入)
-    format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
-    
-    if show_vol and vols:
-        panes.append({"chart": common_opts, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "VOL"}}], "height": 120})
-        
-    if show_macd and macd_dif:
-        s_macd = [
-            {"type": "Line", "data": macd_dif, "options": {"color": "#FFA500", "lineWidth": 1, "title": "DIF", "priceFormat": format_2f}},
-            {"type": "Line", "data": macd_dea, "options": {"color": "#2196F3", "lineWidth": 1, "title": "DEA", "priceFormat": format_2f}},
-            {"type": "Histogram", "data": macd_hist, "options": {"title": "MACD", "priceFormat": format_2f}}
-        ]
-        panes.append({"chart": common_opts, "series": s_macd, "height": 150})
-        
-    if show_kdj and k_line:
-        s_kdj = [
-            {"type": "Line", "data": k_line, "options": {"color": "#FFA500", "title": "K", "priceFormat": format_2f}},
-            {"type": "Line", "data": d_line, "options": {"color": "#2196F3", "title": "D", "priceFormat": format_2f}}
-        ]
-        panes.append({"chart": common_opts, "series": s_kdj, "height": 120})
-        
-    if show_rsi and rsi_line:
-        panes.append({"chart": common_opts, "series": [{"type": "Line", "data": rsi_line, "options": {"color": "#E040FB", "title": "RSI", "priceFormat": format_2f}}], "height": 120})
-        
-    if show_obv and obv_line:
-        panes.append({"chart": common_opts, "series": [{"type": "Line", "data": obv_line, "options": {"color": "#FFA500", "title": "OBV", "priceFormat": {"type": "volume"}}}], "height": 120})
+        boll_json = to_json_list(full_df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'})
 
-    if show_bias and bias_line:
-        panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
+    # MACD
+    macd_json = "[]"
+    if show_macd:
+        macd_json = to_json_list(full_df, {'dif':'macd_12_26_9', 'dea':'macds_12_26_9', 'hist':'macdh_12_26_9'})
 
-    # --- 渲染 Key ---
-    # 因為我們是依賴「數據切割 (df slicing)」來控制視圖，
-    # 所以每次滑桿變動，Key 必須變動，強制重畫成新的範圍。
-    # 這樣雖然是「重置」，但會「重置到滑桿指定的位置」，這就是你要的「位置保留」效果。
-    st_key = f"desk_v10_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
+    # KDJ
+    kdj_json = "[]"
+    if show_kdj:
+        kdj_json = to_json_list(full_df, {'k':'stochk_14_3_3', 'd':'stochd_14_3_3'})
+        
+    # RSI
+    rsi_json = "[]"
+    if show_rsi:
+        rsi_json = to_json_list(full_df, {'rsi':'rsi'})
+
+    # OBV
+    obv_json = "[]"
+    if show_obv:
+        obv_json = to_json_list(full_df, {'obv':'obv'})
+
+    # BIAS
+    bias_json = "[]"
+    if show_bias:
+        bias_json = to_json_list(full_df, {'bias':'bias'})
+
+    # ---------------------------------------------------------
+    # 5. JavaScript 引擎注入 (核心魔法)
+    # ---------------------------------------------------------
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; }}
+            .chart-container {{ position: relative; width: 100%; }}
+        </style>
+    </head>
+    <body>
+        <div id="main-chart" class="chart-container" style="height: 450px;"></div>
+        <div id="vol-chart" class="chart-container" style="height: {'100px' if show_vol else '0px'}; display: {'block' if show_vol else 'none'};"></div>
+        <div id="macd-chart" class="chart-container" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};"></div>
+        <div id="kdj-chart" class="chart-container" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};"></div>
+        <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};"></div>
+        <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};"></div>
+        <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
+
+        <script>
+            const ticker = "{ticker}"; // 用於記憶不同股票的縮放
+            
+            // 數據源
+            const candlesData = {candles_json};
+            const volData = {vol_json};
+            const maData = {ma_json};
+            const bollData = {boll_json};
+            const macdData = {macd_json};
+            const kdjData = {kdj_json};
+            const rsiData = {rsi_json};
+            const obvData = {obv_json};
+            const biasData = {bias_json};
+
+            // 共用設定
+            const chartOptions = {{
+                layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
+                grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
+                rightPriceScale: {{ borderColor: '#E0E0E0', scaleMargins: {{ top: 0.1, bottom: 0.1 }}, visible: true, minimumWidth: 80 }},
+                timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+            }};
+
+            // 建立圖表實例
+            const charts = [];
+            
+            function createChart(id, opts) {{
+                const el = document.getElementById(id);
+                if (el.style.display === 'none') return null;
+                const chart = LightweightCharts.createChart(el, opts);
+                charts.push(chart);
+                return chart;
+            }}
+
+            const mainChart = createChart('main-chart', chartOptions);
+            const volChart = createChart('vol-chart', {{...chartOptions, rightPriceScale: {{...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}}}}}}); // Volume 貼底
+            const macdChart = createChart('macd-chart', chartOptions);
+            const kdjChart = createChart('kdj-chart', chartOptions);
+            const rsiChart = createChart('rsi-chart', chartOptions);
+            const obvChart = createChart('obv-chart', chartOptions);
+            const biasChart = createChart('bias-chart', chartOptions);
+
+            // --- 繪製主圖 ---
+            if (mainChart) {{
+                const candleSeries = mainChart.addCandlestickSeries({{
+                    upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
+                }});
+                candleSeries.setData(candlesData);
+
+                // MA (EMA)
+                if (maData.length > 0) {{
+                    const first = maData[0];
+                    if (first.ma5) mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma5 }})));
+                    if (first.ma10) mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma10 }})));
+                    if (first.ma20) mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma20 }})));
+                    if (first.ma60) mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma60 }})));
+                }}
+
+                // BOLL
+                if (bollData.length > 0) {{
+                    mainChart.addLineSeries({{ color: '#2962FF', lineWidth: 1, lineStyle: 2, title: 'BBU' }}).setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
+                    mainChart.addLineSeries({{ color: '#2962FF', lineWidth: 1, lineStyle: 2, title: 'MID' }}).setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
+                    mainChart.addLineSeries({{ color: '#2962FF', lineWidth: 1, lineStyle: 2, title: 'BBL' }}).setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
+                }}
+            }}
+
+            // --- 繪製副圖 ---
+            if (volChart && volData.length > 0) {{
+                const volSeries = volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL' }});
+                volSeries.setData(volData);
+            }}
+
+            if (macdChart && macdData.length > 0) {{
+                macdChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'DIF' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
+                macdChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'DEA' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
+                const histSeries = macdChart.addHistogramSeries({{ title: 'MACD' }});
+                histSeries.setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
+            }}
+
+            if (kdjChart && kdjData.length > 0) {{
+                kdjChart.addLineSeries({{ color: '#FFA500', title: 'K' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
+                kdjChart.addLineSeries({{ color: '#2196F3', title: 'D' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
+            }}
+
+            if (rsiChart && rsiData.length > 0) {{
+                rsiChart.addLineSeries({{ color: '#E040FB', title: 'RSI' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }})));
+            }}
+
+            if (obvChart && obvData.length > 0) {{
+                obvChart.addLineSeries({{ color: '#FFA500', title: 'OBV', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }})));
+            }}
+            
+            if (biasChart && biasData.length > 0) {{
+                biasChart.addLineSeries({{ color: '#607D8B', title: 'BIAS' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }})));
+            }}
+
+            // ---------------------------------------------------------
+            // 6. 核心魔法：記憶同步 & 縮放鎖定
+            // ---------------------------------------------------------
+            
+            // 1. 同步所有圖表的時間軸 (Cursor Sync)
+            // 當其中一個圖表縮放，其他跟著動
+            charts.forEach(c => {{
+                c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                    if (range) {{
+                        charts.forEach(other => {{
+                            if (other !== c) other.timeScale().setVisibleLogicalRange(range);
+                        }});
+                        // 2. 儲存縮放狀態到瀏覽器 (Key = 股票代碼)
+                        // 這樣就算 Python 重新整理，JS 也能讀回來
+                        localStorage.setItem('futu_range_' + ticker, JSON.stringify(range));
+                    }}
+                }});
+            }});
+
+            // 3. 初始加載：讀取記憶
+            const savedRange = localStorage.getItem('futu_range_' + ticker);
+            if (savedRange && mainChart) {{
+                try {{
+                    const range = JSON.parse(savedRange);
+                    mainChart.timeScale().setVisibleLogicalRange(range);
+                }} catch(e) {{ console.log('Range load error', e); }}
+            }} else if (mainChart) {{
+                // 沒記憶就 Fit Content
+                mainChart.timeScale().fitContent();
+            }}
+
+            // 自動 RWD
+            window.addEventListener('resize', () => {{
+                charts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
+            }});
+        </script>
+    </body>
+    </html>
+    """
     
-    if len(candles) > 0:
-        renderLightweightCharts(panes, key=st_key)
-    else:
-        st.warning("目前範圍無 K 線數據")
+    # 渲染 HTML (高度根據顯示的圖表動態計算)
+    total_height = 460
+    if show_vol: total_height += 100
+    if show_macd: total_height += 150
+    if show_kdj: total_height += 120
+    if show_rsi: total_height += 120
+    if show_obv: total_height += 120
+    if show_bias: total_height += 120
+
+    components.html(html_code, height=total_height)
