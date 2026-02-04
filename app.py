@@ -9,7 +9,7 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股專業看盤 (仿富途牛牛 - V3.3 最終對齊版)")
+st.subheader("台美股")
 
 # ---------------------------------------------------------
 # 2. 側邊欄設定
@@ -142,7 +142,7 @@ for _, row in df.iterrows():
     if is_safe(row.get('bias')): bias_line.append({'time': t, 'value': float(row['bias'])})
 
 # ---------------------------------------------------------
-# 5. 渲染圖表 (對齊修復)
+# 5. 渲染圖表 (暴力寬度設定)
 # ---------------------------------------------------------
 chartOptions = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
@@ -150,7 +150,9 @@ chartOptions = {
     "rightPriceScale": { 
         "borderColor": "#E0E0E0", 
         "scaleMargins": {"top": 0.1, "bottom": 0.1},
-        "minimumWidth": 75, # 固定寬度
+        # 【暴力對齊核心】直接給到 95px，這寬度連 "100,000,000" 都裝得下
+        # 只要沒有任何一個數字超過 95px，所有圖表就會強制對齊
+        "minimumWidth": 95, 
     },
     "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True },
     "handleScroll": { "vertTouchDrag": False }
@@ -168,7 +170,6 @@ series_config = [
     }
 ]
 
-# 均線
 if ma5: series_config.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "lastValueVisible": False, "priceLineVisible": False}})
 if ma10: series_config.append({"type": "Line", "data": ma10, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10", "lastValueVisible": False, "priceLineVisible": False}})
 if ma20: series_config.append({"type": "Line", "data": ma20, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20", "lastValueVisible": False, "priceLineVisible": False}})
@@ -178,7 +179,6 @@ if bbl: series_config.append({"type": "Line", "data": bbl, "options": {"color": 
 
 panes = [{"chart": chartOptions, "series": series_config, "height": 400}]
 
-# 【關鍵修改】: 下面所有的 priceScaleId 都移除了，讓它們使用預設的 RightScale，繼承 minimumWidth
 if vols: panes.append({"chart": chartOptions, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "成交量 (Vol)"}}], "height": 100})
 
 macd_series = []
@@ -198,6 +198,6 @@ if bias_line: panes.append({"chart": chartOptions, "series": [{"type": "Line", "
 
 st.markdown("### 📊 技術分析圖表")
 if len(candles) > 0:
-    renderLightweightCharts(panes, key="final_v3_perfect_align")
+    renderLightweightCharts(panes, key="final_v3_force_align")
 else:
     st.error("錯誤：無數據")
