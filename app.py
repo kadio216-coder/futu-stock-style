@@ -1,6 +1,6 @@
 import streamlit as st
 import yfinance as yf
-import pandas_ta as ta # 保留其他指標用
+import pandas_ta as ta
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -22,7 +22,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (手動計算布林線，保證抓得到)
+# 2. 資料層 (修復 KeyError: date_obj)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -39,47 +39,63 @@ def get_data(ticker, period="2y", interval="1d"):
 
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         
-        # 統一轉小寫，方便後續處理
-        data.columns = [col.lower() for col in data.columns]
+        # 統一轉小寫
+        data.columns = [str(col).lower() for col in data.columns]
 
-        # --- 指標計算 ---
-        data['MA5'] = ta.sma(data['close'], length=5)
-        data['MA10'] = ta.sma(data['close'], length=10)
-        data['MA20'] = ta.sma(data['close'], length=20)
-        data['MA60'] = ta.sma(data['close'], length=60)
+        # --- 手動計算指標 (保留 V6.3 的 BBU 修復) ---
+        # 為了安全，這裡使用 data['close'] 之前先確認欄位存在，以防萬一
+        close_col = 'close' if 'close' in data.columns else 'adj close'
+        if close_col not in data.columns: return None
+
+        data['MA5'] = ta.sma(data[close_col], length=5)
+        data['MA10'] = ta.sma(data[close_col], length=10)
+        data['MA20'] = ta.sma(data[close_col], length=20)
+        data['MA60'] = ta.sma(data[close_col], length=60)
         
-        # 【關鍵修正】手動計算布林通道 (Manual Calculation)
-        # 不依賴 pandas_ta 的動態欄位名稱，確保 key 絕對正確
-        # 中軌 = 20日均線
-        data['boll_mid'] = data['close'].rolling(window=20).mean()
-        # 標準差
-        data['boll_std'] = data['close'].rolling(window=20).std()
-        # 上軌 = 中軌 + 2*std
+        # 手動計算布林通道
+        data['boll_mid'] = data[close_col].rolling(window=20).mean()
+        data['boll_std'] = data[close_col].rolling(window=20).std()
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
-        # 下軌 = 中軌 - 2*std
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
         
-        # 其他指標繼續用套件
-        macd = ta.macd(data['close'])
+        # 其他指標
+        macd = ta.macd(data[close_col])
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        data['RSI'] = ta.rsi(data['close'], length=14)
+        data['RSI'] = ta.rsi(data[close_col], length=14)
         
-        stoch = ta.stoch(data['high'], data['low'], data['close'])
+        stoch = ta.stoch(data['high'], data['low'], data[close_col])
         if stoch is not None: data = pd.concat([data, stoch], axis=1)
         
-        data['OBV'] = ta.obv(data['close'], data['volume'])
-        data['BIAS'] = (data['close'] - data['MA20']) / data['MA20'] * 100
+        data['OBV'] = ta.obv(data[close_col], data['volume'])
+        data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
-        # 再次整理欄位名稱
-        data.columns = [col.lower() for col in data.columns]
+        # --- 【關鍵修復】日期欄位智慧偵測 ---
+        data = data.reset_index()
+        # 再次統一轉小寫 (因為 reset_index 可能產生新的大寫欄位)
+        data.columns = [str(col).lower() for col in data.columns]
         
-        if 'date' in data.columns:
-            data['date_obj'] = data['date']
-            data['time'] = data['date'].astype('int64') // 10**9
-        elif 'index' in data.columns:
-            data['date_obj'] = data['index']
-            data['time'] = data['index'].astype('int64') // 10**9
+        date_col = None
+        # 依序檢查所有可能的日期欄位名稱
+        possible_names = ['date', 'datetime', 'timestamp', 'index']
+        for name in possible_names:
+            if name in data.columns:
+                date_col = name
+                break
+        
+        if date_col is None:
+            # 如果名字都對不上，就直接找第一個格式是 datetime 的欄位
+            for col in data.columns:
+                if pd.api.types.is_datetime64_any_dtype(data[col]):
+                    date_col = col
+                    break
+        
+        if date_col is None:
+            # 真的沒救了
+            return None
+            
+        data['date_obj'] = pd.to_datetime(data[date_col])
+        data['time'] = data['date_obj'].astype('int64') // 10**9
             
         return data
     except Exception as e:
@@ -107,7 +123,7 @@ with col_tools:
     st.markdown("#### ⚙️ 指標")
     st.caption("主圖")
     show_ma = st.checkbox("MA 均線", value=True)
-    show_boll = st.checkbox("BOLL 布林", value=True) # 預設開啟
+    show_boll = st.checkbox("BOLL 布林", value=True)
     
     st.divider()
     st.caption("副圖")
@@ -132,7 +148,7 @@ with col_main:
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
-        st.error("無數據")
+        st.error(f"無法取得 {ticker} 資料，請檢查代碼是否正確。")
         st.stop()
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
@@ -174,8 +190,6 @@ with col_main:
             if is_valid(row.get('ma60')): ma60.append({'time': t, 'value': row['ma60']})
             
         if show_boll:
-            # 【關鍵修正】使用手動計算的欄位名稱 'boll_upper' 和 'boll_lower'
-            # 這樣就不用賭 pandas_ta 的欄位名稱了
             if is_valid(row.get('boll_upper')): bbu.append({'time': t, 'value': row['boll_upper']})
             if is_valid(row.get('boll_lower')): bbl.append({'time': t, 'value': row['boll_lower']})
 
@@ -218,7 +232,6 @@ with col_main:
         if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#E040FB', "lineWidth": 1, "title": "MA20", "priceLineVisible": False, "lastValueVisible": False}})
         if ma60: series_main.append({"type": "Line", "data": ma60, "options": {"color": '#00E676', "lineWidth": 1, "title": "MA60", "priceLineVisible": False, "lastValueVisible": False}})
     
-    # 【關鍵修正】顯示手動計算的布林線 (深藍 + 虛線)
     if show_boll:
         if bbu: series_main.append({
             "type": "Line", 
@@ -226,8 +239,8 @@ with col_main:
             "options": {
                 "color": "#2962FF", 
                 "lineWidth": 1, 
-                "lineStyle": 2, # 虛線
-                "title": "BBU", # 加上標題，確認有顯示
+                "lineStyle": 2, 
+                "title": "BBU", 
                 "lastValueVisible": False,
                 "priceLineVisible": False
             }
@@ -239,7 +252,7 @@ with col_main:
                 "color": "#2962FF", 
                 "lineWidth": 1, 
                 "lineStyle": 2, 
-                "title": "BBL", # 加上標題
+                "title": "BBL", 
                 "lastValueVisible": False,
                 "priceLineVisible": False
             }
@@ -277,7 +290,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v63_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
+    st_key = f"desk_v64_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
