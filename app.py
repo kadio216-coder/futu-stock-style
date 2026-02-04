@@ -111,6 +111,7 @@ k_line, d_line, rsi_line, obv_line, bias_line = [], [], [], [], []
 for _, row in df.iterrows():
     t = int(row['time'])
     
+    # K線
     if is_safe(row['open']) and is_safe(row['close']):
         candles.append({
             'time': t, 
@@ -142,17 +143,18 @@ for _, row in df.iterrows():
     if is_safe(row.get('bias')): bias_line.append({'time': t, 'value': float(row['bias'])})
 
 # ---------------------------------------------------------
-# 5. 渲染圖表 (手機優化版)
+# 5. 渲染圖表 (加入 minimumWidth 設定)
 # ---------------------------------------------------------
 chartOptions = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
     "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
-    "rightPriceScale": { "borderColor": "#E0E0E0", "scaleMargins": {"top": 0.1, "bottom": 0.1} },
+    "rightPriceScale": { 
+        "borderColor": "#E0E0E0", 
+        "scaleMargins": {"top": 0.1, "bottom": 0.1},
+        "minimumWidth": 75, # <--- 【關鍵修正】強制固定右側寬度為 75px
+    },
     "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True },
-    # 【關鍵修改】手機防誤觸設定
-    "handleScroll": {
-        "vertTouchDrag": False,  # 關閉垂直拖曳 -> 允許網頁上下捲動
-    }
+    "handleScroll": { "vertTouchDrag": False }
 }
 
 series_config = [
@@ -195,6 +197,6 @@ if bias_line: panes.append({"chart": chartOptions, "series": [{"type": "Line", "
 
 st.markdown("### 📊 技術分析圖表")
 if len(candles) > 0:
-    renderLightweightCharts(panes, key="final_v3_mobile")
+    renderLightweightCharts(panes, key="final_v3_aligned")
 else:
     st.error("錯誤：無數據")
