@@ -11,23 +11,23 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Desktop Replica")
 
-# 注入 CSS 微調，讓版面更緊湊，更像交易軟體
+# CSS 優化：讓 Checkbox 更緊湊，減少右側留白
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 1rem; padding-left: 1rem; padding-right: 1rem;}
     h3 {margin-bottom: 0px;}
-    .stRadio > div {flex-direction: row;} /* 橫向排列 */
+    .stRadio > div {flex-direction: row;} 
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
+    div.stCheckbox {margin-bottom: -10px;} /* 縮小勾選框間距 */
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (沿用 V5 的穩定核心)
+# 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
     try:
-        # 特別處理年K
         dl_interval = "1mo" if interval == "1y" else interval
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         
@@ -44,7 +44,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['MA5'] = ta.sma(data['Close'], length=5)
         data['MA10'] = ta.sma(data['Close'], length=10)
         data['MA20'] = ta.sma(data['Close'], length=20)
-        data['MA60'] = ta.sma(data['Close'], length=60) # 牛牛通常有 60MA
+        data['MA60'] = ta.sma(data['Close'], length=60)
         
         bbands = ta.bbands(data['Close'], length=20, std=2)
         if bbands is not None: data = pd.concat([data, bbands], axis=1)
@@ -75,9 +75,8 @@ def get_data(ticker, period="2y", interval="1d"):
         return None
 
 # ---------------------------------------------------------
-# 3. 佈局架構 (左側欄 + 主畫面分割)
+# 3. 佈局架構
 # ---------------------------------------------------------
-# --- 左側欄：只放最核心的搜尋 ---
 with st.sidebar:
     st.header("🔍 股票搜尋")
     market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
@@ -87,38 +86,33 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
 
-# --- 主畫面：切分成 [圖表區 85%] [指標面板 15%] ---
-col_main, col_tools = st.columns([0.85, 0.15])
+# 主畫面切分 [82% 圖表, 18% 控制面板] - 稍微調寬一點右邊，避免文字折行
+col_main, col_tools = st.columns([0.82, 0.18])
 
 # ---------------------------------------------------------
-# 4. 右側指標面板 (仿牛牛右側欄)
+# 4. 右側指標面板
 # ---------------------------------------------------------
 with col_tools:
-    st.markdown("#### ⚙️ 指標管理")
-    st.caption("主圖指標")
-    show_ma = st.checkbox("MA", value=True)
-    show_boll = st.checkbox("BOLL", value=False)
+    st.markdown("#### ⚙️ 指標")
+    st.caption("主圖")
+    show_ma = st.checkbox("MA 均線", value=True)
+    show_boll = st.checkbox("BOLL 布林", value=False)
     
     st.divider()
-    st.caption("副圖指標")
+    st.caption("副圖")
     show_vol = st.checkbox("VOL 成交量", value=True)
     show_macd = st.checkbox("MACD", value=True)
     show_kdj = st.checkbox("KDJ", value=True)
     show_rsi = st.checkbox("RSI", value=True)
     show_obv = st.checkbox("OBV", value=False)
     show_bias = st.checkbox("BIAS", value=False)
-    
-    st.divider()
-    # 把滑桿放在右下角或左側都可以，這裡保留在右側作為工具
-    st.caption("📅 區間鎖定")
-    # 為了不讓右邊太擠，滑桿我們放回左邊 sidebar，或者放在 main top
 
 # ---------------------------------------------------------
-# 5. 主圖表區邏輯
+# 5. 主圖表區
 # ---------------------------------------------------------
 with col_main:
-    # --- 頂部工具列 (週期選擇) ---
-    c_top1, c_top2 = st.columns([0.7, 0.3])
+    # 頂部工具列
+    c_top1, c_top2 = st.columns([0.6, 0.4])
     with c_top1:
         st.subheader(f"{ticker} 走勢圖")
     with c_top2:
@@ -133,18 +127,17 @@ with col_main:
         st.error("無數據，請檢查代碼")
         st.stop()
         
-    # --- 日期篩選 (連動滑桿) ---
+    # 日期滑桿 (放在主圖上方)
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     default_start = max_d - timedelta(days=365)
     if default_start < min_d: default_start = min_d
     
-    # 這次我們把滑桿放在主圖上方，類似 Timeline
     start_date, end_date = st.slider("", min_d, max_d, (default_start, max_d), format="YYYY-MM-DD", label_visibility="collapsed")
     
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
-    # --- 數據組裝 ---
+    # --- 數據打包 ---
     COLOR_UP = '#FF5252'
     COLOR_DOWN = '#00B746'
     
@@ -158,10 +151,12 @@ with col_main:
 
     for _, row in df.iterrows():
         t = int(row['time'])
+        # K線必填
         if is_valid(row['open']):
             candles.append({'time': t, 'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']})
-        
-        # 根據右側勾選狀態，決定是否要處理這些數據 (節省資源)
+        else: continue # 沒K線就跳過這天
+
+        # 只處理被勾選的指標 (優化效能)
         if show_vol:
             v = row['volume'] if is_valid(row['volume']) else 0
             color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
@@ -180,9 +175,13 @@ with col_main:
         if show_macd:
             if is_valid(row.get('macd_12_26_9')): macd_dif.append({'time': t, 'value': row['macd_12_26_9']})
             if is_valid(row.get('macds_12_26_9')): macd_dea.append({'time': t, 'value': row['macds_12_26_9']})
+            
+            # MACD 柱狀圖特殊處理
             if is_valid(row.get('macdh_12_26_9')): 
                 h = row['macdh_12_26_9']
                 macd_hist.append({'time': t, 'value': h, 'color': COLOR_UP if h > 0 else COLOR_DOWN})
+            else:
+                macd_hist.append({'time': t}) # 佔位符
         
         if show_kdj:
             if is_valid(row.get('stochk_14_3_3')): k_line.append({'time': t, 'value': row['stochk_14_3_3']})
@@ -192,11 +191,11 @@ with col_main:
         if show_obv and is_valid(row.get('obv')): obv_line.append({'time': t, 'value': row['obv']})
         if show_bias and is_valid(row.get('bias')): bias_line.append({'time': t, 'value': row['bias']})
 
-    # --- 圖表配置 (桌面版風格) ---
+    # --- 圖表配置 ---
     common_opts = {
         "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
         "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
-        "rightPriceScale": { "borderColor": "#E0E0E0", "visible": True, "minimumWidth": 80 }, # 鎖定寬度
+        "rightPriceScale": { "borderColor": "#E0E0E0", "visible": True, "minimumWidth": 85 },
         "leftPriceScale": { "visible": False },
         "timeScale": { "borderColor": "#E0E0E0", "rightOffset": 5 },
         "handleScroll": { "mouseWheel": True, "pressedMouseMove": True },
@@ -205,12 +204,11 @@ with col_main:
     
     panes = []
     
-    # 1. 主圖 (K線)
+    # 1. 主圖
     series_main = [
         {"type": "Candlestick", "data": candles, "options": {"upColor": COLOR_UP, "downColor": COLOR_DOWN, "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN, "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN}}
     ]
     
-    # 根據右側勾選動態加入線圖
     if show_ma:
         if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "priceLineVisible": False, "lastValueVisible": False}})
         if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#2196F3', "lineWidth": 1, "title": "MA10", "priceLineVisible": False, "lastValueVisible": False}})
@@ -221,9 +219,9 @@ with col_main:
         if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False}})
         if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False}})
         
-    panes.append({"chart": common_opts, "series": series_main, "height": 500}) # 主圖加高
+    panes.append({"chart": common_opts, "series": series_main, "height": 500})
     
-    # 2. 副圖 (根據勾選動態堆疊)
+    # 2. 副圖
     format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
     
     if show_vol and vols:
@@ -253,5 +251,11 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    # 渲染
-    renderLightweightCharts(panes, key=f"desktop_v6_{ticker}_{interval_label}_{show_ma}")
+    # --- 渲染 (關鍵修正) ---
+    # 將所有狀態都加入 Key，確保任何變動都會觸發完整的重新渲染
+    st_key = f"desk_v61_{ticker}_{interval_label}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}_{start_date}_{end_date}"
+    
+    if len(candles) > 0:
+        renderLightweightCharts(panes, key=st_key)
+    else:
+        st.warning("目前範圍無 K 線數據")
