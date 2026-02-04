@@ -9,7 +9,7 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股")
+st.subheader("台美股專業看盤 (仿富途牛牛 - V4.2 OBV修正版)")
 
 # ---------------------------------------------------------
 # 2. 側邊欄設定
@@ -51,7 +51,6 @@ def get_clean_data(ticker, interval_label):
         if interval_label == "年 K":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
 
-        # 這裡只刪除 OHLC 都沒有的行，保留其他即便指標是 NaN 的行，以便後續補齊空白
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         
         # 計算指標
@@ -93,7 +92,7 @@ if df is None or df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 數據打包 (時間軸同步核心)
+# 4. 數據打包
 # ---------------------------------------------------------
 COLOR_UP = '#FF5252'
 COLOR_DOWN = '#00B746'
@@ -109,13 +108,9 @@ bbu, bbl = [], []
 macd_dif, macd_dea, macd_hist = [], [], []
 k_line, d_line, rsi_line, obv_line, bias_line = [], [], [], [], []
 
-# 【核心修改】即使指標是 NaN，也要送出一個帶有 time 的「空白數據包」
-# 這樣圖表軟體才知道這裡有一個「時間點」，只是沒有值，格線才會對齊
-
 for _, row in df.iterrows():
     t = int(row['time'])
     
-    # K線 (一定要有值)
     if is_safe(row['open']) and is_safe(row['close']):
         candles.append({
             'time': t, 
@@ -123,19 +118,14 @@ for _, row in df.iterrows():
             'low': float(row['low']), 'close': float(row['close'])
         })
     else:
-        continue # 如果連 K 線都沒有，這一天就跳過
+        continue 
 
-    # 成交量
     if is_safe(row['volume']):
         bar_color = COLOR_UP if row['close'] >= row['open'] else COLOR_DOWN
         vols.append({'time': t, 'value': float(row['volume']), 'color': bar_color})
     else:
-        # 補一個透明的 0，佔位用
         vols.append({'time': t, 'value': 0, 'color': 'rgba(0,0,0,0)'})
 
-    # 指標處理：有值就塞值，沒值就塞「空白時間點 (Whitespace)」
-    # 這樣所有 List 的長度都會跟 K 線一模一樣
-    
     ma5.append({'time': t, 'value': float(row['ma5'])} if is_safe(row.get('ma5')) else {'time': t})
     ma10.append({'time': t, 'value': float(row['ma10'])} if is_safe(row.get('ma10')) else {'time': t})
     ma20.append({'time': t, 'value': float(row['ma20'])} if is_safe(row.get('ma20')) else {'time': t})
@@ -150,7 +140,7 @@ for _, row in df.iterrows():
         hist_val = float(row['macdh_12_26_9'])
         macd_hist.append({'time': t, 'value': hist_val, 'color': COLOR_UP if hist_val > 0 else COLOR_DOWN})
     else:
-        macd_hist.append({'time': t}) # 空白佔位
+        macd_hist.append({'time': t})
         
     k_line.append({'time': t, 'value': float(row['stochk_14_3_3'])} if is_safe(row.get('stochk_14_3_3')) else {'time': t})
     d_line.append({'time': t, 'value': float(row['stochd_14_3_3'])} if is_safe(row.get('stochd_14_3_3')) else {'time': t})
@@ -161,7 +151,7 @@ for _, row in df.iterrows():
 
 
 # ---------------------------------------------------------
-# 5. 渲染圖表 (寬度鎖定 + 隱藏左軸)
+# 5. 渲染圖表
 # ---------------------------------------------------------
 common_chart_options = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
@@ -169,7 +159,7 @@ common_chart_options = {
     "rightPriceScale": { 
         "borderColor": "#E0E0E0", 
         "scaleMargins": {"top": 0.1, "bottom": 0.1},
-        "minimumWidth": 80, # 有了時間同步，80px 其實就夠了
+        "minimumWidth": 80, 
         "visible": True,
     },
     "leftPriceScale": { "visible": False },
@@ -177,8 +167,9 @@ common_chart_options = {
     "handleScroll": { "vertTouchDrag": False }
 }
 
-# 格式設定
 format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
+# 【關鍵修改】OBV 使用 "volume" 格式 (例如 113M)，縮短數字長度
+format_volume = {"type": "volume"} 
 
 series_config = [
     {
@@ -215,11 +206,14 @@ if d_line: kdj_series.append({"type": "Line", "data": d_line, "options": {"color
 if kdj_series: panes.append({"chart": common_chart_options, "series": kdj_series, "height": 100})
 
 if rsi_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": rsi_line, "options": {"color": "#9C27B0", "title": "RSI(14)", "priceFormat": format_2f}}], "height": 100})
-if obv_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": obv_line, "options": {"color": "#FF9800", "title": "OBV"}}], "height": 100})
+
+# 【OBV 修正】加入 priceFormat: format_volume
+if obv_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": obv_line, "options": {"color": "#FF9800", "title": "OBV", "priceFormat": format_volume}}], "height": 100})
+
 if bias_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "乖離率", "priceFormat": format_2f}}], "height": 100})
 
 st.markdown("### 📊 技術分析圖表")
 if len(candles) > 0:
-    renderLightweightCharts(panes, key="final_v4_1_synced")
+    renderLightweightCharts(panes, key="final_v4_2_obv_fix")
 else:
     st.error("錯誤：無數據")
