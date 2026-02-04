@@ -19,7 +19,7 @@ st.markdown("""
     .stRadio > div {flex-direction: row;} 
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
     div.stCheckbox {margin-bottom: -10px;}
-    /* 調整按鈕樣式更像標籤 */
+    /* 按鈕樣式優化 */
     div.stButton > button {
         width: 100%;
         padding: 0.25rem 0.5rem;
@@ -120,13 +120,11 @@ with col_tools:
     show_bias = st.checkbox("BIAS", value=False)
 
 with col_main:
-    # 頂部工具列
     c_top1, c_top2 = st.columns([0.6, 0.4])
     with c_top1: st.subheader(f"{ticker} 走勢圖")
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "年K": "1y"}
-    # 這裡我們需要抓取「最大」的資料，這樣快捷鍵的 "Max" 才能生效
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -135,16 +133,13 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # --- 快捷區間邏輯 (取代刻度) ---
-    # 使用 session_state 來控制滑桿的位置
+    # --- 快捷區間邏輯 ---
     if 'slider_range' not in st.session_state:
-        # 預設看半年
         default_start = max_d - timedelta(days=180)
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
-    # 快捷鍵按鈕區
-    cols_btn = st.columns([1, 1, 1, 1, 1, 1, 6]) # 調整按鈕寬度
+    cols_btn = st.columns([1, 1, 1, 1, 1, 1, 6])
     
     def set_range(months=0, years=0, ytd=False, is_max=False):
         end = max_d
@@ -171,18 +166,16 @@ with col_main:
     with cols_btn[5]: 
         if st.button("全部"): set_range(is_max=True)
 
-    # --- 雙向滑桿 (綁定 Session State) ---
-    # 這裡的 key='slider_range' 是關鍵，它讓按鈕可以控制滑桿
+    # 雙向滑桿
     start_date, end_date = st.slider(
         "", 
         min_value=min_d, 
         max_value=max_d, 
-        key='slider_range', # 綁定狀態
+        key='slider_range', 
         format="YYYY-MM-DD", 
         label_visibility="collapsed"
     )
     
-    # 數據切片
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
@@ -246,6 +239,9 @@ with col_main:
         "handleScale": { "axisPressedMouseMove": True, "mouseWheel": True }
     }
     
+    # 【關鍵修正】定義小數點格式，防止 NameError
+    format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
+    
     panes = []
     
     # 1. 主圖
@@ -266,6 +262,7 @@ with col_main:
         
     panes.append({"chart": common_opts, "series": series_main, "height": 500})
     
+    # 2. 副圖
     if show_vol and vols:
         panes.append({"chart": common_opts, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "VOL"}}], "height": 120})
         
@@ -293,7 +290,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v101_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
+    st_key = f"desk_v102_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
