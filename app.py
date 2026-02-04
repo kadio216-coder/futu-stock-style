@@ -23,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層
+# 2. 資料層 (更加嚴格的數據格式化)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -38,6 +38,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
 
+        # 強制刪除 OHLC 為空的行
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -79,7 +80,10 @@ def get_data(ticker, period="2y", interval="1d"):
         if date_col is None: return None
             
         data['date_obj'] = pd.to_datetime(data[date_col])
-        data['time'] = data['date_obj'].astype('int64') # JS 需要秒數或毫秒，這裡轉秒
+        data['time'] = data['date_obj'].astype('int64') // 10**9 # 轉秒
+        
+        # 【關鍵修復】確保時間排序，否則 JS 會崩潰
+        data = data.sort_values('time')
             
         return data
     except: return None
@@ -117,7 +121,6 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "年K": "1y"}
-    # 這裡我們一次抓取最大量的數據，讓 JS 去處理縮放
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -125,73 +128,64 @@ with col_main:
         st.stop()
 
     # ---------------------------------------------------------
-    # 4. 數據轉 JSON (給 JavaScript 吃)
+    # 4. 數據轉 JSON (修復 NaN 問題)
     # ---------------------------------------------------------
     def to_json_list(df, cols, time_col='time'):
         res = []
-        for _, row in df.iterrows():
-            item = {'time': int(row[time_col]) // 10**9} # 轉 Unix Timestamp (秒)
-            # 確保數據有效
-            valid = True
-            for k, v in cols.items():
-                val = row.get(v)
-                if val is None or pd.isna(val) or np.isinf(val):
-                    # 如果是 K 線圖缺數據，這筆就不要；如果是指標缺，該指標為 null
-                    if k in ['open', 'close']: valid = False; break
-                    item[k] = None
-                else:
-                    item[k] = float(val)
-            if valid: res.append(item)
-        return json.dumps(res)
+        # 將 NaN 替換為 None，這樣 json.dumps 會轉成 null，JS 才能讀
+        df_clean = df.where(pd.notnull(df), None)
+        
+        for _, row in df_clean.iterrows():
+            try:
+                item = {'time': int(row[time_col])}
+                valid = True
+                for k, v in cols.items():
+                    val = row.get(v)
+                    # K線圖如果不完整，直接跳過這一天
+                    if k in ['open', 'high', 'low', 'close'] and val is None:
+                        valid = False; break
+                    item[k] = val
+                if valid: res.append(item)
+            except: continue
+        return json.dumps(res) # 這裡輸出的 null 是 JS 合法的
 
-    # 準備各個數據包
+    # 準備數據
     candles_json = to_json_list(full_df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
-    
-    # 為了節省傳輸量，只打包勾選的數據
     vol_json = to_json_list(full_df, {'value':'volume'}) if show_vol else "[]"
     
-    # MA
     ma_json = "[]"
     if show_ma:
         ma_cols = {}
-        if 'ma5' in full_df.columns: ma_cols['ma5'] = 'ma5'
-        if 'ma10' in full_df.columns: ma_cols['ma10'] = 'ma10'
-        if 'ma20' in full_df.columns: ma_cols['ma20'] = 'ma20'
-        if 'ma60' in full_df.columns: ma_cols['ma60'] = 'ma60'
+        for c in ['ma5', 'ma10', 'ma20', 'ma60']:
+            if c in full_df.columns: ma_cols[c] = c
         ma_json = to_json_list(full_df, ma_cols)
 
-    # BOLL
     boll_json = "[]"
     if show_boll:
         boll_json = to_json_list(full_df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'})
 
-    # MACD
     macd_json = "[]"
     if show_macd:
         macd_json = to_json_list(full_df, {'dif':'macd_12_26_9', 'dea':'macds_12_26_9', 'hist':'macdh_12_26_9'})
 
-    # KDJ
     kdj_json = "[]"
     if show_kdj:
         kdj_json = to_json_list(full_df, {'k':'stochk_14_3_3', 'd':'stochd_14_3_3'})
         
-    # RSI
     rsi_json = "[]"
     if show_rsi:
         rsi_json = to_json_list(full_df, {'rsi':'rsi'})
 
-    # OBV
     obv_json = "[]"
     if show_obv:
         obv_json = to_json_list(full_df, {'obv':'obv'})
 
-    # BIAS
     bias_json = "[]"
     if show_bias:
         bias_json = to_json_list(full_df, {'bias':'bias'})
 
     # ---------------------------------------------------------
-    # 5. JavaScript 引擎注入 (核心魔法)
+    # 5. JavaScript 引擎
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -199,7 +193,7 @@ with col_main:
     <head>
         <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
         <style>
-            body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; }}
+            body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
         </style>
     </head>
@@ -213,9 +207,7 @@ with col_main:
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
 
         <script>
-            const ticker = "{ticker}"; // 用於記憶不同股票的縮放
-            
-            // 數據源
+            // 數據注入
             const candlesData = {candles_json};
             const volData = {vol_json};
             const maData = {ma_json};
@@ -225,8 +217,14 @@ with col_main:
             const rsiData = {rsi_json};
             const obvData = {obv_json};
             const biasData = {bias_json};
+            
+            const ticker = "{ticker}";
 
-            // 共用設定
+            // 檢查數據是否為空，避免崩潰
+            if (!candlesData || candlesData.length === 0) {{
+                document.body.innerHTML = '<div style="padding:20px; color:red;">No Data Available for rendering</div>';
+            }}
+
             const chartOptions = {{
                 layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
                 grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
@@ -235,7 +233,6 @@ with col_main:
                 crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
             }};
 
-            // 建立圖表實例
             const charts = [];
             
             function createChart(id, opts) {{
@@ -247,30 +244,28 @@ with col_main:
             }}
 
             const mainChart = createChart('main-chart', chartOptions);
-            const volChart = createChart('vol-chart', {{...chartOptions, rightPriceScale: {{...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}}}}}}); // Volume 貼底
+            const volChart = createChart('vol-chart', {{...chartOptions, rightPriceScale: {{...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}}}}}}); 
             const macdChart = createChart('macd-chart', chartOptions);
             const kdjChart = createChart('kdj-chart', chartOptions);
             const rsiChart = createChart('rsi-chart', chartOptions);
             const obvChart = createChart('obv-chart', chartOptions);
             const biasChart = createChart('bias-chart', chartOptions);
 
-            // --- 繪製主圖 ---
+            // --- 繪圖 ---
             if (mainChart) {{
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
                 }});
                 candleSeries.setData(candlesData);
 
-                // MA (EMA)
                 if (maData.length > 0) {{
                     const first = maData[0];
-                    if (first.ma5) mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma5 }})));
-                    if (first.ma10) mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma10 }})));
-                    if (first.ma20) mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma20 }})));
-                    if (first.ma60) mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma60 }})));
+                    if (first.ma5 !== undefined) mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma5 }})));
+                    if (first.ma10 !== undefined) mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma10 }})));
+                    if (first.ma20 !== undefined) mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma20 }})));
+                    if (first.ma60 !== undefined) mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}).setData(maData.map(d => ({{ time: d.time, value: d.ma60 }})));
                 }}
 
-                // BOLL
                 if (bollData.length > 0) {{
                     mainChart.addLineSeries({{ color: '#2962FF', lineWidth: 1, lineStyle: 2, title: 'BBU' }}).setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
                     mainChart.addLineSeries({{ color: '#2962FF', lineWidth: 1, lineStyle: 2, title: 'MID' }}).setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
@@ -278,7 +273,6 @@ with col_main:
                 }}
             }}
 
-            // --- 繪製副圖 ---
             if (volChart && volData.length > 0) {{
                 const volSeries = volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL' }});
                 volSeries.setData(volData);
@@ -308,38 +302,23 @@ with col_main:
                 biasChart.addLineSeries({{ color: '#607D8B', title: 'BIAS' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }})));
             }}
 
-            // ---------------------------------------------------------
-            // 6. 核心魔法：記憶同步 & 縮放鎖定
-            // ---------------------------------------------------------
-            
-            // 1. 同步所有圖表的時間軸 (Cursor Sync)
-            // 當其中一個圖表縮放，其他跟著動
+            // --- 同步與記憶 ---
             charts.forEach(c => {{
                 c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                     if (range) {{
-                        charts.forEach(other => {{
-                            if (other !== c) other.timeScale().setVisibleLogicalRange(range);
-                        }});
-                        // 2. 儲存縮放狀態到瀏覽器 (Key = 股票代碼)
-                        // 這樣就算 Python 重新整理，JS 也能讀回來
-                        localStorage.setItem('futu_range_' + ticker, JSON.stringify(range));
+                        charts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
+                        localStorage.setItem('futu_mem_' + ticker, JSON.stringify(range));
                     }}
                 }});
             }});
 
-            // 3. 初始加載：讀取記憶
-            const savedRange = localStorage.getItem('futu_range_' + ticker);
-            if (savedRange && mainChart) {{
-                try {{
-                    const range = JSON.parse(savedRange);
-                    mainChart.timeScale().setVisibleLogicalRange(range);
-                }} catch(e) {{ console.log('Range load error', e); }}
+            const saved = localStorage.getItem('futu_mem_' + ticker);
+            if (saved && mainChart) {{
+                try {{ mainChart.timeScale().setVisibleLogicalRange(JSON.parse(saved)); }} catch(e){{}}
             }} else if (mainChart) {{
-                // 沒記憶就 Fit Content
                 mainChart.timeScale().fitContent();
             }}
 
-            // 自動 RWD
             window.addEventListener('resize', () => {{
                 charts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
             }});
@@ -348,7 +327,7 @@ with col_main:
     </html>
     """
     
-    # 渲染 HTML (高度根據顯示的圖表動態計算)
+    # 計算總高度
     total_height = 460
     if show_vol: total_height += 100
     if show_macd: total_height += 150
