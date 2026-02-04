@@ -3,16 +3,17 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Style Analyzer")
-st.subheader("台美股專業看盤 (仿富途牛牛 - V4.3 絕對像素對齊版)")
+st.subheader("台美股專業看盤 (仿富途牛牛 - V4.4 絕對同步總控版)")
 
 # ---------------------------------------------------------
-# 2. 側邊欄設定
+# 2. 側邊欄設定 (新增日期範圍控制器)
 # ---------------------------------------------------------
 st.sidebar.header("股票設定")
 
@@ -38,7 +39,8 @@ st.sidebar.caption(f"查詢代碼: {ticker}")
 def get_clean_data(ticker, interval_label):
     try:
         interval = interval_map[interval_label]
-        period = "2y" if interval_label == "日 K" else "max"
+        # 抓取足夠長的歷史資料，讓滑桿有空間可以拉
+        period = "5y" if interval_label in ["日 K", "週 K"] else "max"
         download_interval = "1mo" if interval_label == "年 K" else interval
         
         data = yf.download(ticker, period=period, interval=download_interval, progress=False)
@@ -76,8 +78,10 @@ def get_clean_data(ticker, interval_label):
         data.columns = [col.lower() for col in data.columns]
         
         if 'date' in data.columns:
+            data['date_obj'] = data['date'] # 保留 datetime 物件作篩選用
             data['time'] = data['date'].astype('int64') // 10**9
         elif 'index' in data.columns:
+            data['date_obj'] = data['index']
             data['time'] = data['index'].astype('int64') // 10**9
             
         return data
@@ -85,10 +89,36 @@ def get_clean_data(ticker, interval_label):
         st.error(f"Error: {e}")
         return None
 
-df = get_clean_data(ticker, selected_interval_label)
+full_df = get_clean_data(ticker, selected_interval_label)
 
-if df is None or df.empty:
+if full_df is None or full_df.empty:
     st.error("無資料")
+    st.stop()
+
+# --- 【關鍵功能】日期範圍總控滑桿 ---
+st.sidebar.divider()
+st.sidebar.write("### 📅 圖表縮放總控")
+min_date = full_df['date_obj'].min().to_pydatetime()
+max_date = full_df['date_obj'].max().to_pydatetime()
+
+# 預設顯示最近 180 天 (約半年)
+default_start = max_date - timedelta(days=180)
+if default_start < min_date: default_start = min_date
+
+# 建立雙向滑桿
+start_date, end_date = st.sidebar.slider(
+    "調整觀察區間 (所有圖表同步)",
+    min_value=min_date,
+    max_value=max_date,
+    value=(default_start, max_date),
+    format="YYYY-MM-DD"
+)
+
+# 根據滑桿篩選數據
+df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
+
+if df.empty:
+    st.warning("選取區間無數據，請擴大範圍")
     st.stop()
 
 # ---------------------------------------------------------
@@ -126,7 +156,6 @@ for _, row in df.iterrows():
     else:
         vols.append({'time': t, 'value': 0, 'color': 'rgba(0,0,0,0)'})
 
-    # 確保每個列表都有相同的長度 (補齊空白)
     ma5.append({'time': t, 'value': float(row['ma5'])} if is_safe(row.get('ma5')) else {'time': t})
     ma10.append({'time': t, 'value': float(row['ma10'])} if is_safe(row.get('ma10')) else {'time': t})
     ma20.append({'time': t, 'value': float(row['ma20'])} if is_safe(row.get('ma20')) else {'time': t})
@@ -152,79 +181,62 @@ for _, row in df.iterrows():
 
 
 # ---------------------------------------------------------
-# 5. 渲染圖表 (像素級對齊核心設定)
+# 5. 渲染圖表 (鎖定互動 + 強制對齊)
 # ---------------------------------------------------------
 common_chart_options = {
     "layout": { "backgroundColor": "#FFFFFF", "textColor": "#333333" },
     "grid": { "vertLines": {"color": "#F0F0F0"}, "horzLines": {"color": "#F0F0F0"} },
-    # 【核心修改 1】強制右側寬度固定為 120px (非常寬，絕對夠放任何數字)
     "rightPriceScale": { 
         "borderColor": "#E0E0E0", 
         "scaleMargins": {"top": 0.1, "bottom": 0.1},
-        "minimumWidth": 120, 
+        "minimumWidth": 100,  # 保持寬度一致
         "visible": True,
     },
-    # 【核心修改 2】完全隱藏左側軸，避免干擾
     "leftPriceScale": { "visible": False },
-    # 【核心修改 3】固定右側偏移量，確保 K 線起始點一致
-    "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True, "rightOffset": 12 },
-    "handleScroll": { "vertTouchDrag": False }
+    "timeScale": { "borderColor": "#E0E0E0", "timeVisible": True, "rightOffset": 2 },
+    
+    # 【核心修改】鎖死圖表本身的互動，強迫使用 Slider，確保 100% 同步
+    "handleScroll": False,
+    "handleScale": False,
 }
 
-# 格式設定
 format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
 format_volume = {"type": "volume"} 
 
-# --- 構建所有面板 (Panes) ---
 panes = []
 
-# Pane 0: K 線主圖
+# Pane 0
 series_main = [
-    {
-        "type": "Candlestick",
-        "data": candles,
-        "options": {
-            "upColor": COLOR_UP, "downColor": COLOR_DOWN,
-            "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN,
-            "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN,
-        }
-    }
+    {"type": "Candlestick", "data": candles, "options": {"upColor": COLOR_UP, "downColor": COLOR_DOWN, "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN, "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN}}
 ]
 if ma5: series_main.append({"type": "Line", "data": ma5, "options": {"color": '#FFA500', "lineWidth": 1, "title": "MA5", "lastValueVisible": False, "priceLineVisible": False}})
 if ma10: series_main.append({"type": "Line", "data": ma10, "options": {"color": '#40E0D0', "lineWidth": 1, "title": "MA10", "lastValueVisible": False, "priceLineVisible": False}})
 if ma20: series_main.append({"type": "Line", "data": ma20, "options": {"color": '#9370DB', "lineWidth": 2, "title": "MA20", "lastValueVisible": False, "priceLineVisible": False}})
 if bbu: series_main.append({"type": "Line", "data": bbu, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
 if bbl: series_main.append({"type": "Line", "data": bbl, "options": {"color": "rgba(0, 0, 255, 0.3)", "lineWidth": 1, "lineStyle": 2, "lastValueVisible": False, "priceLineVisible": False}})
-
 panes.append({"chart": common_chart_options, "series": series_main, "height": 400})
 
-# Pane 1: 成交量
+# Pane 1-N (其他指標)
 if vols: panes.append({"chart": common_chart_options, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "成交量 (Vol)"}}], "height": 100})
 
-# Pane 2: MACD
 macd_series = []
 if macd_dif: macd_series.append({"type": "Line", "data": macd_dif, "options": {"color": "#2962FF", "lineWidth": 1, "title": "DIF", "priceFormat": format_2f}})
 if macd_dea: macd_series.append({"type": "Line", "data": macd_dea, "options": {"color": "#FF6D00", "lineWidth": 1, "title": "DEA", "priceFormat": format_2f}})
 if macd_hist: macd_series.append({"type": "Histogram", "data": macd_hist, "options": {"title": "MACD", "priceFormat": format_2f}})
 if macd_series: panes.append({"chart": common_chart_options, "series": macd_series, "height": 150})
 
-# Pane 3: KDJ
 kdj_series = []
 if k_line: kdj_series.append({"type": "Line", "data": k_line, "options": {"color": "#E91E63", "title": "K", "priceFormat": format_2f}})
 if d_line: kdj_series.append({"type": "Line", "data": d_line, "options": {"color": "#2196F3", "title": "D", "priceFormat": format_2f}})
 if kdj_series: panes.append({"chart": common_chart_options, "series": kdj_series, "height": 100})
 
-# Pane 4: RSI
 if rsi_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": rsi_line, "options": {"color": "#9C27B0", "title": "RSI(14)", "priceFormat": format_2f}}], "height": 100})
-
-# Pane 5: OBV (格式為 Volume)
 if obv_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": obv_line, "options": {"color": "#FF9800", "title": "OBV", "priceFormat": format_volume}}], "height": 100})
-
-# Pane 6: Bias
 if bias_line: panes.append({"chart": common_chart_options, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "乖離率", "priceFormat": format_2f}}], "height": 100})
 
-st.markdown("### 📊 技術分析圖表")
+st.markdown("### 📊 技術分析圖表 (總控模式)")
 if len(candles) > 0:
-    renderLightweightCharts(panes, key="final_v4_3_pixel_perfect")
+    # 這裡的 key 加入了 start_date 字串，確保每次滑動滑桿都會強制重繪圖表
+    renderLightweightCharts(panes, key=f"final_v4_4_slider_{start_date}_{end_date}")
 else:
     st.error("錯誤：無數據")
