@@ -10,30 +10,35 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (UI++)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Stable)")
 
-# 注入 CSS：打造「質感按鈕」與「狀態回饋」
-# 這裡我們覆寫了 stButton 的樣式，讓它看起來更像看盤軟體的快捷鍵
 st.markdown("""
 <style>
-    .block-container {padding-top: 1rem; padding-bottom: 1rem; padding-left: 1rem; padding-right: 1rem;}
+    /* 【關鍵修復】加大頂部留白至 3.5rem，避免被 Streamlit 導航列遮擋標題 */
+    .block-container {
+        padding-top: 3.5rem !important;
+        padding-bottom: 1rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
     h3 {margin-bottom: 0px;}
     .stRadio > div {flex-direction: row;} 
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
     div.stCheckbox {margin-bottom: -10px;}
     
-    /* --- 按鈕質感優化核心 --- */
+    /* 按鈕樣式優化 */
     div.stButton > button {
         width: 100%;
-        border-radius: 20px; /* 圓角膠囊狀 */
+        border-radius: 20px;
         border: none;
         font-weight: 600;
         font-size: 14px;
-        transition: all 0.2s ease; /* 平滑過渡動畫 */
+        transition: all 0.2s ease;
         padding: 0.25rem 0.5rem;
     }
 
-    /* 未選中狀態 (Secondary) - 類似富途的淺灰底 */
+    /* 未選中狀態 */
     div.stButton > button[kind="secondary"] {
         background-color: #F0F2F5;
         color: #666666;
@@ -44,17 +49,16 @@ st.markdown("""
         border: none;
     }
 
-    /* 選中狀態 (Primary) - 富途牛牛的經典藍/橘風格 */
+    /* 選中狀態 (深藍色高亮) */
     div.stButton > button[kind="primary"] {
-        background-color: #2962FF; /* 專業深藍 */
-        color: white;
-        box-shadow: 0 2px 5px rgba(41, 98, 255, 0.3); /* 微微的陰影增加立體感 */
+        background-color: #2962FF !important;
+        color: white !important;
+        box-shadow: 0 2px 5px rgba(41, 98, 255, 0.3);
     }
     div.stButton > button[kind="primary"]:hover {
-        background-color: #1E46BE;
+        background-color: #1E46BE !important;
         border: none;
     }
-    /* ------------------------ */
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,7 +104,6 @@ def get_data(ticker, period="2y", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
-        # 日期
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -118,8 +121,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['time'] = data['date_obj'].astype('int64') // 10**9
             
         return data
-    except Exception as e:
-        return None
+    except: return None
 
 # ---------------------------------------------------------
 # 3. 佈局架構
@@ -149,9 +151,13 @@ with col_tools:
     show_bias = st.checkbox("BIAS", value=False)
 
 with col_main:
+    # 頂部工具列
     c_top1, c_top2 = st.columns([0.6, 0.4])
-    with c_top1: st.subheader(f"{ticker} 走勢圖")
-    with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
+    with c_top1: 
+        # 使用 Markdown 的 # 語法，確保字體夠大且位置正確
+        st.markdown(f"### {ticker} 走勢圖")
+    with c_top2: 
+        interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "年K": "1y"}
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
@@ -162,26 +168,19 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # --- 【UI 質感升級】快捷區間選擇器 ---
-    
-    # 1. 初始化狀態：記錄哪個按鈕是「活躍 (Active)」的
+    # --- 快捷區間邏輯 ---
     if 'active_btn' not in st.session_state:
-        st.session_state['active_btn'] = '6m' # 預設 6個月
+        st.session_state['active_btn'] = '6m' # 預設點亮 6月
         
     if 'slider_range' not in st.session_state:
         default_start = max_d - timedelta(days=180)
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
-    # 2. 定義按鈕邏輯
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
-        # 更新活躍按鈕
         st.session_state['active_btn'] = btn_key
-        
-        # 更新時間
         end = max_d
-        if is_max:
-            start = min_d
+        if is_max: start = min_d
         elif ytd:
             start = datetime(end.year, 1, 1)
             if start < min_d: start = min_d
@@ -190,11 +189,8 @@ with col_main:
             if start < min_d: start = min_d
         st.session_state['slider_range'] = (start, end)
 
-    # 3. 渲染按鈕 (使用 columns 排版)
-    # 我們根據 active_btn 來決定按鈕是 'primary' (深藍色/選中) 還是 'secondary' (灰色/未選中)
+    # 渲染按鈕
     btn_cols = st.columns(7)
-    
-    # 按鈕配置列表
     buttons = [
         {"label": "1月", "key": "1m", "m": 1, "y": 0, "ytd": False, "max": False},
         {"label": "3月", "key": "3m", "m": 3, "y": 0, "ytd": False, "max": False},
@@ -207,20 +203,16 @@ with col_main:
 
     for i, btn in enumerate(buttons):
         with btn_cols[i]:
-            # 判斷是否為當前活躍按鈕
             is_active = (st.session_state['active_btn'] == btn['key'])
-            # 渲染按鈕
             if st.button(
                 btn['label'], 
                 key=f"btn_{btn['key']}", 
-                type="primary" if is_active else "secondary", # 這裡控制顏色！
+                type="primary" if is_active else "secondary", 
                 use_container_width=True
             ):
                 handle_btn_click(btn['key'], months=btn['m'], years=btn['y'], ytd=btn['ytd'], is_max=btn['max'])
-                st.rerun() # 強制刷新以更新按鈕顏色
+                st.rerun()
 
-    # --- 雙向滑桿 ---
-    # 如果使用者手動拖了滑桿，我們就把 active_btn 清空，表示「自定義模式」
     def on_slider_change():
         st.session_state['active_btn'] = None
 
@@ -229,7 +221,7 @@ with col_main:
         min_value=min_d, 
         max_value=max_d, 
         key='slider_range', 
-        on_change=on_slider_change, # 偵測手動拖曳
+        on_change=on_slider_change,
         format="YYYY-MM-DD", 
         label_visibility="collapsed"
     )
@@ -347,7 +339,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v103_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
+    st_key = f"desk_v104_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
