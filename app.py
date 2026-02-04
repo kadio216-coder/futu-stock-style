@@ -10,8 +10,10 @@ from streamlit_lightweight_charts import renderLightweightCharts
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Stable)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (UI++)")
 
+# 注入 CSS：打造「質感按鈕」與「狀態回饋」
+# 這裡我們覆寫了 stButton 的樣式，讓它看起來更像看盤軟體的快捷鍵
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 1rem; padding-left: 1rem; padding-right: 1rem;}
@@ -19,12 +21,40 @@ st.markdown("""
     .stRadio > div {flex-direction: row;} 
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
     div.stCheckbox {margin-bottom: -10px;}
-    /* 按鈕樣式優化 */
+    
+    /* --- 按鈕質感優化核心 --- */
     div.stButton > button {
         width: 100%;
+        border-radius: 20px; /* 圓角膠囊狀 */
+        border: none;
+        font-weight: 600;
+        font-size: 14px;
+        transition: all 0.2s ease; /* 平滑過渡動畫 */
         padding: 0.25rem 0.5rem;
-        font-size: 0.8rem;
     }
+
+    /* 未選中狀態 (Secondary) - 類似富途的淺灰底 */
+    div.stButton > button[kind="secondary"] {
+        background-color: #F0F2F5;
+        color: #666666;
+    }
+    div.stButton > button[kind="secondary"]:hover {
+        background-color: #E1E4E8;
+        color: #333333;
+        border: none;
+    }
+
+    /* 選中狀態 (Primary) - 富途牛牛的經典藍/橘風格 */
+    div.stButton > button[kind="primary"] {
+        background-color: #2962FF; /* 專業深藍 */
+        color: white;
+        box-shadow: 0 2px 5px rgba(41, 98, 255, 0.3); /* 微微的陰影增加立體感 */
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #1E46BE;
+        border: none;
+    }
+    /* ------------------------ */
 </style>
 """, unsafe_allow_html=True)
 
@@ -89,7 +119,6 @@ def get_data(ticker, period="2y", interval="1d"):
             
         return data
     except Exception as e:
-        print(f"Error: {e}")
         return None
 
 # ---------------------------------------------------------
@@ -133,15 +162,23 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # --- 快捷區間邏輯 ---
+    # --- 【UI 質感升級】快捷區間選擇器 ---
+    
+    # 1. 初始化狀態：記錄哪個按鈕是「活躍 (Active)」的
+    if 'active_btn' not in st.session_state:
+        st.session_state['active_btn'] = '6m' # 預設 6個月
+        
     if 'slider_range' not in st.session_state:
         default_start = max_d - timedelta(days=180)
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
-    cols_btn = st.columns([1, 1, 1, 1, 1, 1, 6])
-    
-    def set_range(months=0, years=0, ytd=False, is_max=False):
+    # 2. 定義按鈕邏輯
+    def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
+        # 更新活躍按鈕
+        st.session_state['active_btn'] = btn_key
+        
+        # 更新時間
         end = max_d
         if is_max:
             start = min_d
@@ -153,25 +190,46 @@ with col_main:
             if start < min_d: start = min_d
         st.session_state['slider_range'] = (start, end)
 
-    with cols_btn[0]: 
-        if st.button("1月"): set_range(months=1)
-    with cols_btn[1]: 
-        if st.button("3月"): set_range(months=3)
-    with cols_btn[2]: 
-        if st.button("6月"): set_range(months=6)
-    with cols_btn[3]: 
-        if st.button("1年"): set_range(years=1)
-    with cols_btn[4]: 
-        if st.button("今年"): set_range(ytd=True)
-    with cols_btn[5]: 
-        if st.button("全部"): set_range(is_max=True)
+    # 3. 渲染按鈕 (使用 columns 排版)
+    # 我們根據 active_btn 來決定按鈕是 'primary' (深藍色/選中) 還是 'secondary' (灰色/未選中)
+    btn_cols = st.columns(7)
+    
+    # 按鈕配置列表
+    buttons = [
+        {"label": "1月", "key": "1m", "m": 1, "y": 0, "ytd": False, "max": False},
+        {"label": "3月", "key": "3m", "m": 3, "y": 0, "ytd": False, "max": False},
+        {"label": "6月", "key": "6m", "m": 6, "y": 0, "ytd": False, "max": False},
+        {"label": "1年", "key": "1y", "m": 0, "y": 1, "ytd": False, "max": False},
+        {"label": "3年", "key": "3y", "m": 0, "y": 3, "ytd": False, "max": False},
+        {"label": "今年", "key": "ytd", "m": 0, "y": 0, "ytd": True, "max": False},
+        {"label": "最大", "key": "max", "m": 0, "y": 0, "ytd": False, "max": True},
+    ]
 
-    # 雙向滑桿
+    for i, btn in enumerate(buttons):
+        with btn_cols[i]:
+            # 判斷是否為當前活躍按鈕
+            is_active = (st.session_state['active_btn'] == btn['key'])
+            # 渲染按鈕
+            if st.button(
+                btn['label'], 
+                key=f"btn_{btn['key']}", 
+                type="primary" if is_active else "secondary", # 這裡控制顏色！
+                use_container_width=True
+            ):
+                handle_btn_click(btn['key'], months=btn['m'], years=btn['y'], ytd=btn['ytd'], is_max=btn['max'])
+                st.rerun() # 強制刷新以更新按鈕顏色
+
+    # --- 雙向滑桿 ---
+    # 如果使用者手動拖了滑桿，我們就把 active_btn 清空，表示「自定義模式」
+    def on_slider_change():
+        st.session_state['active_btn'] = None
+
     start_date, end_date = st.slider(
         "", 
         min_value=min_d, 
         max_value=max_d, 
         key='slider_range', 
+        on_change=on_slider_change, # 偵測手動拖曳
         format="YYYY-MM-DD", 
         label_visibility="collapsed"
     )
@@ -239,7 +297,6 @@ with col_main:
         "handleScale": { "axisPressedMouseMove": True, "mouseWheel": True }
     }
     
-    # 【關鍵修正】定義小數點格式，防止 NameError
     format_2f = {"type": "price", "precision": 2, "minMove": 0.01}
     
     panes = []
@@ -290,7 +347,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v102_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
+    st_key = f"desk_v103_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
