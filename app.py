@@ -14,7 +14,6 @@ st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Stable)")
 
 st.markdown("""
 <style>
-    /* 【關鍵修復】加大頂部留白至 3.5rem，避免被 Streamlit 導航列遮擋標題 */
     .block-container {
         padding-top: 3.5rem !important;
         padding-bottom: 1rem;
@@ -27,7 +26,6 @@ st.markdown("""
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
     div.stCheckbox {margin-bottom: -10px;}
     
-    /* 按鈕樣式優化 */
     div.stButton > button {
         width: 100%;
         border-radius: 20px;
@@ -38,7 +36,6 @@ st.markdown("""
         padding: 0.25rem 0.5rem;
     }
 
-    /* 未選中狀態 */
     div.stButton > button[kind="secondary"] {
         background-color: #F0F2F5;
         color: #666666;
@@ -49,7 +46,6 @@ st.markdown("""
         border: none;
     }
 
-    /* 選中狀態 (深藍色高亮) */
     div.stButton > button[kind="primary"] {
         background-color: #2962FF !important;
         color: white !important;
@@ -63,20 +59,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層
+# 2. 資料層 (新增季K合成邏輯)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
     try:
-        dl_interval = "1mo" if interval == "1y" else interval
+        # 判斷是否為「合成季K」模式
+        is_quarterly = False
+        dl_interval = interval
+        
+        if interval == "3mo": # 自定義標記
+            is_quarterly = True
+            dl_interval = "1mo" # 下載月K來合成
+        elif interval == "1y":
+            dl_interval = "1mo" # 下載月K來合成年K (比原生1y精準)
+
+        # 下載數據
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         
         if data.empty: return None
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         data.index = data.index.tz_localize(None)
         
+        # --- 重採樣 (Resampling) 邏輯 ---
+        # 必須確保欄位首字大寫以符合 yfinance 格式，方便後面統一轉小寫
+        data.columns = [c.capitalize() for c in data.columns] 
+
         if interval == "1y":
-            data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            # 合成年K
+            data = data.resample('YE').agg({
+                'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+            }).dropna()
+        elif is_quarterly:
+            # 【關鍵新增】合成季K (3個月)
+            # 'QE' = Quarter End (季末)
+            data = data.resample('QE').agg({
+                'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+            }).dropna()
 
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         data.columns = [str(col).lower() for col in data.columns]
@@ -121,7 +140,9 @@ def get_data(ticker, period="2y", interval="1d"):
         data['time'] = data['date_obj'].astype('int64') // 10**9
             
         return data
-    except: return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
 
 # ---------------------------------------------------------
 # 3. 佈局架構
@@ -151,15 +172,16 @@ with col_tools:
     show_bias = st.checkbox("BIAS", value=False)
 
 with col_main:
-    # 頂部工具列
     c_top1, c_top2 = st.columns([0.6, 0.4])
     with c_top1: 
-        # 使用 Markdown 的 # 語法，確保字體夠大且位置正確
         st.markdown(f"### {ticker} 走勢圖")
     with c_top2: 
-        interval_label = st.radio("週期", ["日K", "週K", "月K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
+        # 【新增】加入 "季K" 選項
+        interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
-    interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "年K": "1y"}
+    # 【新增】映射 "季K" 到 "3mo" (這是我們自定義的標記)
+    interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
+    
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -168,9 +190,9 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # --- 快捷區間邏輯 ---
+    # --- 快捷區間 ---
     if 'active_btn' not in st.session_state:
-        st.session_state['active_btn'] = '6m' # 預設點亮 6月
+        st.session_state['active_btn'] = '6m'
         
     if 'slider_range' not in st.session_state:
         default_start = max_d - timedelta(days=180)
@@ -189,7 +211,6 @@ with col_main:
             if start < min_d: start = min_d
         st.session_state['slider_range'] = (start, end)
 
-    # 渲染按鈕
     btn_cols = st.columns(7)
     buttons = [
         {"label": "1月", "key": "1m", "m": 1, "y": 0, "ytd": False, "max": False},
@@ -293,7 +314,6 @@ with col_main:
     
     panes = []
     
-    # 1. 主圖
     series_main = [
         {"type": "Candlestick", "data": candles, "options": {"upColor": COLOR_UP, "downColor": COLOR_DOWN, "borderUpColor": COLOR_UP, "borderDownColor": COLOR_DOWN, "wickUpColor": COLOR_UP, "wickDownColor": COLOR_DOWN}}
     ]
@@ -311,7 +331,6 @@ with col_main:
         
     panes.append({"chart": common_opts, "series": series_main, "height": 500})
     
-    # 2. 副圖
     if show_vol and vols:
         panes.append({"chart": common_opts, "series": [{"type": "Histogram", "data": vols, "options": {"priceFormat": {"type": "volume"}, "title": "VOL"}}], "height": 120})
         
@@ -339,7 +358,7 @@ with col_main:
     if show_bias and bias_line:
         panes.append({"chart": common_opts, "series": [{"type": "Line", "data": bias_line, "options": {"color": "#607D8B", "title": "BIAS", "priceFormat": format_2f}}], "height": 120})
 
-    st_key = f"desk_v104_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
+    st_key = f"desk_v105_{ticker}_{interval_label}_{start_date}_{end_date}_{show_ma}_{show_boll}_{show_vol}_{show_macd}_{show_kdj}_{show_rsi}_{show_obv}_{show_bias}"
     
     if len(candles) > 0:
         renderLightweightCharts(panes, key=st_key)
