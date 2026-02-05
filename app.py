@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro MACD)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Final)")
 
 st.markdown("""
 <style>
@@ -184,7 +184,7 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. JSON 序列化 (成交量 & MACD 顏色邏輯)
+    # 4. JSON 序列化
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
@@ -203,7 +203,6 @@ with col_main:
 
     candles_json = to_json_list(df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
     
-    # VOL (紅漲綠跌)
     vol_data_list = []
     if show_vol:
         for _, row in df.iterrows():
@@ -213,29 +212,16 @@ with col_main:
             except: continue
     vol_json = json.dumps(vol_data_list)
     
-    # MACD (紅漲綠跌 + 完整數據)
     macd_data_list = []
     if show_macd:
-        # pandas_ta 的欄位名
-        dif_col = 'macd_12_26_9'
-        dea_col = 'macds_12_26_9'
-        hist_col = 'macdh_12_26_9'
-        
         for _, row in df.iterrows():
             try:
-                dif = row.get(dif_col)
-                dea = row.get(dea_col)
-                hist = row.get(hist_col)
+                dif = row.get('macd_12_26_9')
+                dea = row.get('macds_12_26_9')
+                hist = row.get('macdh_12_26_9')
                 if pd.notnull(dif) and pd.notnull(dea) and pd.notnull(hist):
-                    # 根據 Histogram 正負決定顏色
                     color = '#FF5252' if hist >= 0 else '#00B746'
-                    macd_data_list.append({
-                        'time': int(row['time']), 
-                        'dif': float(dif), 
-                        'dea': float(dea), 
-                        'hist': float(hist),
-                        'color': color 
-                    })
+                    macd_data_list.append({'time': int(row['time']), 'dif': float(dif), 'dea': float(dea), 'hist': float(hist), 'color': color})
             except: continue
     macd_json = json.dumps(macd_data_list)
     
@@ -247,7 +233,7 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (MACD 專屬優化)
+    # 5. JavaScript (初始化即顯示 Legend)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -259,7 +245,7 @@ with col_main:
             .chart-container {{ position: relative; width: 100%; }}
             
             .legend {{
-                position: absolute; top: 10px; left: 10px; z-index: 10;
+                position: absolute; top: 10px; left: 10px; z-index: 100; /* 加大 z-index 確保最上層 */
                 font-size: 12px; line-height: 18px; font-weight: 500; pointer-events: none;
             }}
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
@@ -325,10 +311,7 @@ with col_main:
                 const obvChart = createChart('obv-chart', chartOptions);
                 const biasChart = createChart('bias-chart', chartOptions);
 
-                let volSeries;
-                let bollMidSeries, bollUpSeries, bollLowSeries;
-                let ma5Series, ma10Series, ma20Series, ma60Series;
-
+                let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
                 if (mainChart) {{
@@ -360,16 +343,12 @@ with col_main:
                     volSeries.setData(volData); 
                 }}
 
-                // ★MACD 繪圖 (依照截圖顏色)
                 if (macdChart && macdData.length > 0) {{
-                    // DIF: 橘色 #E6A23C
                     macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
-                    // DEA: 藍色 #2196F3
                     macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
-                    // MACD Histogram: 自動紅綠
                     macdChart.addHistogramSeries({{ priceLineVisible: false }}).setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.color }})));
                 }}
-
+                
                 if (kdjChart && kdjData.length > 0) {{
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
@@ -378,64 +357,62 @@ with col_main:
                 if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
                 if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
-                // --- 3個 Legend 更新邏輯 ---
                 const mainLegendEl = document.getElementById('main-legend');
                 const volLegendEl = document.getElementById('vol-legend');
                 const macdLegendEl = document.getElementById('macd-legend');
 
                 function updateLegends(param) {{
-                    if (!param || !param.time) return;
-                    const t = param.time;
+                    // 如果沒有傳入 param (例如初始化)，我們自己造一個「最後時間」的 param
+                    let t;
+                    if (!param || !param.time) {{
+                        if (candlesData.length > 0) t = candlesData[candlesData.length - 1].time;
+                        else return;
+                    }} else {{
+                        t = param.time;
+                    }}
 
                     // 1. Main Chart
                     let html = '';
                     if (bollData.length > 0) {{
-                        const mid = bollMidSeries ? param.seriesData.get(bollMidSeries)?.value : null;
-                        const up = bollUpSeries ? param.seriesData.get(bollUpSeries)?.value : null;
-                        const low = bollLowSeries ? param.seriesData.get(bollLowSeries)?.value : null;
-                        if (mid != null) html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{up!=null?up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{low!=null?low.toFixed(2):'-'}}</span></div>`;
+                        const d = bollData.find(x => x.time === t);
+                        if (d) {{
+                            html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`;
+                        }}
                     }}
                     if (maData.length > 0) {{
-                        let maHtml = '<div class="legend-row"><span class="legend-label">EMA</span>';
-                        const v5 = ma5Series ? param.seriesData.get(ma5Series)?.value : null;
-                        const v10 = ma10Series ? param.seriesData.get(ma10Series)?.value : null;
-                        const v20 = ma20Series ? param.seriesData.get(ma20Series)?.value : null;
-                        const v60 = ma60Series ? param.seriesData.get(ma60Series)?.value : null;
-                        if (v5 != null) maHtml += `<span class="legend-value" style="color:#FFA500">EMA5:${{v5.toFixed(2)}}</span> `;
-                        if (v10 != null) maHtml += `<span class="legend-value" style="color:#2196F3">EMA10:${{v10.toFixed(2)}}</span> `;
-                        if (v20 != null) maHtml += `<span class="legend-value" style="color:#E040FB">EMA20:${{v20.toFixed(2)}}</span> `;
-                        if (v60 != null) maHtml += `<span class="legend-value" style="color:#00E676">EMA60:${{v60.toFixed(2)}}</span>`;
-                        maHtml += '</div>';
-                        html += maHtml;
+                        const d = maData.find(x => x.time === t);
+                        if (d) {{
+                            let maHtml = '<div class="legend-row"><span class="legend-label">EMA</span>';
+                            if (d.ma5 != null) maHtml += `<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(2)}}</span> `;
+                            if (d.ma10 != null) maHtml += `<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(2)}}</span> `;
+                            if (d.ma20 != null) maHtml += `<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(2)}}</span> `;
+                            if (d.ma60 != null) maHtml += `<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(2)}}</span>`;
+                            maHtml += '</div>';
+                            html += maHtml;
+                        }}
                     }}
-                    mainLegendEl.innerHTML = html;
+                    if (mainLegendEl) mainLegendEl.innerHTML = html;
 
                     // 2. Vol Legend
-                    if (volLegendEl && volSeries) {{
-                        const volItem = volData.find(d => d.time === t);
-                        if (volItem) {{
-                            const valInWan = (volItem.value / 10000).toFixed(2);
-                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{volItem.color}}">VOL: ${{valInWan}}萬</span></div>`;
+                    if (volLegendEl && volData.length > 0) {{
+                        const d = volData.find(x => x.time === t);
+                        if (d) {{
+                            const valInWan = (d.value / 10000).toFixed(2);
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{valInWan}}萬</span></div>`;
                         }}
                     }}
 
-                    // 3. ★MACD Legend (依照截圖樣式)
+                    // 3. MACD Legend
                     if (macdLegendEl && macdData.length > 0) {{
-                        const macdItem = macdData.find(d => d.time === t);
-                        if (macdItem) {{
-                            // 顏色定義：DIF(橘), DEA(藍), MACD(紫)
-                            macdLegendEl.innerHTML = `<div class="legend-row">
-                                <span class="legend-label">MACD</span>
-                                <span class="legend-value" style="color: #E6A23C">DIF: ${{macdItem.dif.toFixed(3)}}</span>
-                                <span class="legend-value" style="color: #2196F3">DEA: ${{macdItem.dea.toFixed(3)}}</span>
-                                <span class="legend-value" style="color: #E040FB">MACD: ${{macdItem.hist.toFixed(3)}}</span>
-                            </div>`;
+                        const d = macdData.find(x => x.time === t);
+                        if (d) {{
+                            macdLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color: #E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`;
                         }}
                     }}
                 }}
 
+                // 訂閱 Crosshair
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
-                
                 allCharts.forEach(c => {{
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
@@ -443,6 +420,9 @@ with col_main:
                     }});
                 }});
                 
+                // ★關鍵：初始化時，手動呼叫一次 updateLegends，顯示最後一筆數據
+                updateLegends(null); // 傳 null 會觸發自動抓最後一筆的邏輯
+
                 window.addEventListener('resize', () => {{
                     allCharts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
                 }});
