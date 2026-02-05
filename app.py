@@ -249,7 +249,7 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★關鍵：鎖定 rightPriceScale minimumWidth)
+    # 5. JavaScript (★關鍵修改：minimumWidth: 120)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -310,7 +310,8 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★關鍵修改：加入 minimumWidth: 90，強制所有圖表右邊寬度一致，確保對齊
+                // ★核心修改：將 minimumWidth 增加到 120
+                // 這樣無論 OBV 的「萬」字佔多寬，其他圖表都會強制保留 120px，保證完全對齊
                 const chartOptions = {{
                     layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
@@ -318,7 +319,7 @@ with col_main:
                         borderColor: '#E0E0E0', 
                         scaleMargins: {{ top: 0.1, bottom: 0.1 }}, 
                         visible: true,
-                        minimumWidth: 90 // ★鎖定寬度
+                        minimumWidth: 120 
                     }},
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
@@ -333,7 +334,7 @@ with col_main:
                 const mainChart = createChart('main-chart', chartOptions);
                 const volChart = createChart('vol-chart', {{
                     ...chartOptions, 
-                    rightPriceScale: {{ ...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }}, // 繼承 minimumWidth
+                    rightPriceScale: {{ ...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
                     localization: {{ priceFormatter: (p) => (p / 10000).toFixed(0) + '萬' }}
                 }});
                 const macdChart = createChart('macd-chart', chartOptions);
