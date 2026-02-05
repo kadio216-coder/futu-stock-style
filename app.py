@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro OBV)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (OBV Unit Fix)")
 
 st.markdown("""
 <style>
@@ -78,7 +78,6 @@ def get_data(ticker, period="2y", interval="1d"):
         macd = ta.macd(data[close_col])
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # KDJ
         stoch = ta.stoch(data['high'], data['low'], data[close_col])
         if stoch is not None: 
             data = pd.concat([data, stoch], axis=1)
@@ -90,12 +89,10 @@ def get_data(ticker, period="2y", interval="1d"):
                 data['j'] = 3 * data['k'] - 2 * data['d']
             except IndexError: pass
 
-        # RSI
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # ★OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
 
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
@@ -249,14 +246,11 @@ with col_main:
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
     kdj_json = to_json_list(df, {'k':'k', 'd':'d', 'j':'j'}) if show_kdj else "[]"
     rsi_json = to_json_list(df, {'rsi6':'rsi6', 'rsi12':'rsi12', 'rsi24':'rsi24'}) if show_rsi else "[]"
-    
-    # ★OBV 數據
     obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
-    
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (新增 OBV 繪圖與 Legend)
+    # 5. JavaScript (OBV 單位修正為 "萬")
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -340,7 +334,13 @@ with col_main:
                 const macdChart = createChart('macd-chart', chartOptions);
                 const kdjChart = createChart('kdj-chart', chartOptions);
                 const rsiChart = createChart('rsi-chart', chartOptions);
-                const obvChart = createChart('obv-chart', chartOptions);
+                
+                // ★OBV Chart: Y軸刻度也改成 "萬"
+                const obvChart = createChart('obv-chart', {{
+                    ...chartOptions,
+                    localization: {{ priceFormatter: (p) => (p / 10000).toFixed(2) + '萬' }}
+                }});
+                
                 const biasChart = createChart('bias-chart', chartOptions);
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -397,7 +397,7 @@ with col_main:
                     rsi24Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi24 }})));
                 }}
 
-                // ★OBV 繪圖 (金黃色 #FFD700)
+                // OBV
                 if (obvChart && obvData.length > 0) {{ 
                     obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', lineWidth: 1 }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
                 }}
@@ -476,15 +476,14 @@ with col_main:
                         }}
                     }}
 
-                    // 6. ★OBV Legend (新增：金黃色 + 千分位)
+                    // 6. ★OBV Legend (數值除以10000 + 萬)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            // 使用 toLocaleString() 加上千分位
-                            const valStr = d.obv.toLocaleString();
+                            const valInWan = (d.obv / 10000).toFixed(2);
                             obvLegendEl.innerHTML = `<div class="legend-row">
                                 <span class="legend-label">OBV</span>
-                                <span class="legend-value" style="color: #FFD700">OBV: ${{valStr}}</span>
+                                <span class="legend-value" style="color: #FFD700">OBV: ${{valInWan}}萬</span>
                             </div>`;
                         }}
                     }}
