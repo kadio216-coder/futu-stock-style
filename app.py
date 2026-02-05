@@ -39,7 +39,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (V10.2 核心，穩定可靠)
+# 2. 資料層 (最穩定的 V10 邏輯)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -104,7 +104,7 @@ def get_data(ticker, period="2y", interval="1d"):
     except: return None
 
 # ---------------------------------------------------------
-# 3. 介面控制
+# 3. 介面控制 (V10 UI)
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🔍 股票搜尋")
@@ -189,18 +189,24 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. 數據轉 JSON (為 JS 準備)
+    # 4. 數據轉 JSON (★關鍵修復★：絕對清洗 NaN)
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
-        df_clean = df.where(pd.notnull(df), None) # 處理 NaN
-        for _, row in df_clean.iterrows():
+        for _, row in df.iterrows():
             item = {'time': int(row['time'])}
             valid = True
             for k, v in cols.items():
                 val = row.get(v)
-                if val is None and k in ['open','close']: valid = False; break
-                item[k] = val
+                # 強制檢查：是 None, 是 NaN, 或是 Inf -> 全部轉成 None
+                if val is None or pd.isna(val) or np.isinf(val):
+                    # 如果是 K 線數據本身缺失，這根 K 棒無效
+                    if k in ['open','high','low','close']: 
+                        valid = False; break
+                    # 如果是指標缺失 (如 MA60 前 60 天)，設為 None (JS 會自動不畫)
+                    item[k] = None 
+                else:
+                    item[k] = float(val) # 強制轉為標準 float，避免 numpy 類型造成錯誤
             if valid: res.append(item)
         return json.dumps(res)
 
@@ -217,12 +223,8 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript 渲染引擎 + 自定義 Legend
+    # 5. JavaScript 渲染引擎 (包含 V12 的 Legend)
     # ---------------------------------------------------------
-    # 顏色定義 (符合截圖風格)
-    # MA: 5(橘), 10(藍), 20(紫), 60(綠)
-    # BOLL: Upper(黃), Mid(粉紅/紫), Lower(青)
-    
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -232,7 +234,7 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* --- 關鍵：左上角 Legend 樣式 --- */
+            /* Legend 樣式 */
             .legend {{
                 position: absolute;
                 top: 10px;
@@ -241,7 +243,7 @@ with col_main:
                 font-size: 12px;
                 line-height: 18px;
                 font-weight: 500;
-                pointer-events: none; /* 讓滑鼠穿透 */
+                pointer-events: none;
             }}
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
             .legend-label {{ font-weight: bold; color: #333; margin-right: 5px; }}
@@ -261,6 +263,7 @@ with col_main:
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
 
         <script>
+            // 數據注入
             const candlesData = {candles_json};
             const maData = {ma_json};
             const bollData = {boll_json};
@@ -303,23 +306,21 @@ with col_main:
                 }});
                 candleSeries.setData(candlesData);
 
-                // BOLL (配色調整：黃、粉、青)
                 if (bollData.length > 0) {{
-                    bollMidSeries = mainChart.addLineSeries({{ color: '#FF4081', lineWidth: 1, title: 'MID' }}); // Pinkish
-                    bollUpSeries = mainChart.addLineSeries({{ color: '#FFD700', lineWidth: 1, title: 'UPPER' }}); // Yellow
-                    bollLowSeries = mainChart.addLineSeries({{ color: '#00E5FF', lineWidth: 1, title: 'LOWER' }}); // Cyan
+                    bollMidSeries = mainChart.addLineSeries({{ color: '#FF4081', lineWidth: 1, title: 'MID' }}); 
+                    bollUpSeries = mainChart.addLineSeries({{ color: '#FFD700', lineWidth: 1, title: 'UPPER' }});
+                    bollLowSeries = mainChart.addLineSeries({{ color: '#00E5FF', lineWidth: 1, title: 'LOWER' }});
                     
                     bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
                     bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
                     bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
                 }}
 
-                // MA (配色調整：橘、藍、紫、綠)
                 if (maData.length > 0) {{
-                    if (maData[0].ma5) {{ ma5Series = mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                    if (maData[0].ma10) {{ ma10Series = mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                    if (maData[0].ma20) {{ ma20Series = mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                    if (maData[0].ma60) {{ ma60Series = mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                    if (maData[0].ma5 !== null) {{ ma5Series = mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                    if (maData[0].ma10 !== null) {{ ma10Series = mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                    if (maData[0].ma20 !== null) {{ ma20Series = mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                    if (maData[0].ma60 !== null) {{ ma60Series = mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                 }}
             }}
             
@@ -338,25 +339,16 @@ with col_main:
             if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
             if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
-            // ---------------------------------------------------------
-            // 核心：動態 Legend 更新邏輯
-            // ---------------------------------------------------------
+            // --- Legend 更新邏輯 ---
             const legendEl = document.getElementById('main-legend');
             
             function updateLegend(param) {{
-                if (!param.time || param.point.x < 0 || param.point.x > mainChart.timeScale().width()) {{
-                    return; // 滑鼠出界不更新 (保留最後數值或清空，這裡選擇保留)
-                }}
+                if (!param.time || param.point.x < 0 || param.point.x > mainChart.timeScale().width()) return;
 
-                // 找對應時間的數據 (從 JS 陣列找，因為 param.seriesData 可能不全)
-                // 這裡使用簡單的 Map 來加速 (為了代碼簡潔，這裡直接用 param.seriesData)
-                // 但為了更像富途，我們需要顯示這一根K棒的所有指標值
-                
                 let html = '';
 
-                // --- BOLL Row ---
+                // BOLL
                 if (bollData.length > 0) {{
-                    // 從 param.seriesData 獲取當前值
                     const mid = param.seriesData.get(bollMidSeries)?.value;
                     const up = param.seriesData.get(bollUpSeries)?.value;
                     const low = param.seriesData.get(bollLowSeries)?.value;
@@ -365,13 +357,13 @@ with col_main:
                         html += `<div class="legend-row">
                             <span class="legend-label">BOLL</span>
                             <span class="legend-value" style="color: #FF4081">MID:${{mid.toFixed(2)}}</span>
-                            <span class="legend-value" style="color: #FFD700">UPPER:${{up.toFixed(2)}}</span>
-                            <span class="legend-value" style="color: #00E5FF">LOWER:${{low.toFixed(2)}}</span>
+                            <span class="legend-value" style="color: #FFD700">UP:${{up.toFixed(2)}}</span>
+                            <span class="legend-value" style="color: #00E5FF">LOW:${{low.toFixed(2)}}</span>
                         </div>`;
                     }}
                 }}
 
-                // --- MA Row ---
+                // MA
                 if (maData.length > 0) {{
                     let maHtml = '<div class="legend-row"><span class="legend-label">EMA</span>';
                     if (ma5Series) {{ const v = param.seriesData.get(ma5Series)?.value; if(v) maHtml += `<span class="legend-value" style="color: #FFA500">EMA5:${{v.toFixed(2)}}</span> `; }}
@@ -381,19 +373,10 @@ with col_main:
                     maHtml += '</div>';
                     html += maHtml;
                 }}
-
                 legendEl.innerHTML = html;
             }}
 
-            // 訂閱十字游標移動事件
             mainChart.subscribeCrosshairMove(updateLegend);
-            
-            // 初始化顯示最後一筆數據
-            // 我們模擬一個 CrosshairMove 事件在最後一個時間點
-            if (candlesData.length > 0) {{
-                // 這裡稍微取巧，等圖表渲染完後自動更新一次
-                // 實際操作中，使用者一動滑鼠就會出來
-            }}
 
             // --- 圖表同步 ---
             const charts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
