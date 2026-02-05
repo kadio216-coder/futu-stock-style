@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Fixed)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro RSI)")
 
 st.markdown("""
 <style>
@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (修復 KDJ 欄位抓取錯誤)
+# 2. 資料層 (新增 RSI 6, 12, 24)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -49,25 +49,17 @@ def get_data(ticker, period="2y", interval="1d"):
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
-        # 處理 MultiIndex (yfinance 新版特性)
-        if isinstance(data.columns, pd.MultiIndex): 
-            data.columns = data.columns.get_level_values(0)
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+        data.index = data.index.tz_localize(None)
         
-        # 時區處理 (防呆)
-        if data.index.tzinfo is not None:
-            data.index = data.index.tz_localize(None)
-        
-        # 重採樣邏輯
-        data.columns = [c.capitalize() for c in data.columns] # 確保首字大寫 (Open, High...)
-        
+        data.columns = [c.capitalize() for c in data.columns]
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         elif is_quarterly:
             data = data.resample('QE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
 
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
-        data.columns = [str(col).lower() for col in data.columns] # 全轉小寫方便後續處理
-        
+        data.columns = [str(col).lower() for col in data.columns]
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
@@ -86,26 +78,27 @@ def get_data(ticker, period="2y", interval="1d"):
         macd = ta.macd(data[close_col])
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # ★KDJ 計算 (關鍵修復：不分大小寫抓取欄位)
+        # KDJ
         stoch = ta.stoch(data['high'], data['low'], data[close_col])
         if stoch is not None: 
             data = pd.concat([data, stoch], axis=1)
-            # 這裡加入 .lower() 確保抓得到 STOCHk 或 stochk
             try:
                 k_col = [c for c in data.columns if c.lower().startswith('stochk')][0]
                 d_col = [c for c in data.columns if c.lower().startswith('stochd')][0]
                 data['k'] = data[k_col]
                 data['d'] = data[d_col]
                 data['j'] = 3 * data['k'] - 2 * data['d']
-            except IndexError:
-                pass # 如果真的算不出來，就跳過 KDJ
+            except IndexError: pass
 
-        data['RSI'] = ta.rsi(data[close_col], length=14)
+        # ★RSI 三線計算 (6, 12, 24)
+        data['RSI6'] = ta.rsi(data[close_col], length=6)
+        data['RSI12'] = ta.rsi(data[close_col], length=12)
+        data['RSI24'] = ta.rsi(data[close_col], length=24)
+
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
         data = data.reset_index()
-        # 確保所有欄位名稱都是字串並小寫
         data.columns = [str(col).lower() for col in data.columns]
         
         date_col = None
@@ -122,7 +115,6 @@ def get_data(ticker, period="2y", interval="1d"):
         
         return data
     except Exception as e:
-        # 將錯誤回傳以便顯示，而不是直接回傳 None
         print(f"Data Error: {e}")
         return None
 
@@ -162,7 +154,7 @@ with col_main:
     full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
-        st.error(f"無數據: {ticker} (可能是代碼錯誤或無法獲取資料)")
+        st.error(f"無數據: {ticker}")
         st.stop()
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
@@ -253,15 +245,16 @@ with col_main:
     
     ma_json = to_json_list(df, {'ma5':'ma5', 'ma10':'ma10', 'ma20':'ma20', 'ma60':'ma60'}) if show_ma else "[]"
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
-    
     kdj_json = to_json_list(df, {'k':'k', 'd':'d', 'j':'j'}) if show_kdj else "[]"
     
-    rsi_json = to_json_list(df, {'rsi':'rsi'}) if show_rsi else "[]"
+    # ★RSI 數據包：包含 RSI6, 12, 24
+    rsi_json = to_json_list(df, {'rsi6':'rsi6', 'rsi12':'rsi12', 'rsi24':'rsi24'}) if show_rsi else "[]"
+    
     obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript
+    # 5. JavaScript (新增 RSI 三線繪圖與 Legend)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -271,6 +264,7 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
+            
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 12px; line-height: 18px; font-weight: 500; pointer-events: none;
@@ -297,7 +291,10 @@ with col_main:
             <div id="kdj-legend" class="legend"></div>
         </div>
         
-        <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};"></div>
+        <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};">
+            <div id="rsi-legend" class="legend"></div>
+        </div>
+        
         <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};"></div>
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
 
@@ -342,6 +339,7 @@ with col_main:
                 const biasChart = createChart('bias-chart', chartOptions);
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
+                let rsi6Series, rsi12Series, rsi24Series;
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
                 if (mainChart) {{
@@ -385,7 +383,17 @@ with col_main:
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', lineWidth: 1 }}).setData(kdjData.map(d => ({{ time: d.time, value: d.j }})));
                 }}
 
-                if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
+                // ★RSI 繪圖 (依照截圖配色: RSI1=橘, RSI2=藍, RSI3=紫)
+                if (rsiChart && rsiData.length > 0) {{
+                    rsi6Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }});
+                    rsi12Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }});
+                    rsi24Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB', lineWidth: 1 }});
+                    
+                    rsi6Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi6 }})));
+                    rsi12Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi12 }})));
+                    rsi24Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi24 }})));
+                }}
+
                 if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
                 if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
@@ -393,6 +401,7 @@ with col_main:
                 const volLegendEl = document.getElementById('vol-legend');
                 const macdLegendEl = document.getElementById('macd-legend');
                 const kdjLegendEl = document.getElementById('kdj-legend');
+                const rsiLegendEl = document.getElementById('rsi-legend');
 
                 function updateLegends(param) {{
                     let t;
@@ -403,10 +412,13 @@ with col_main:
                         t = param.time;
                     }}
 
+                    // 1. Main Chart
                     let html = '';
                     if (bollData.length > 0) {{
                         const d = bollData.find(x => x.time === t);
-                        if (d) html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`;
+                        if (d) {{
+                            html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`;
+                        }}
                     }}
                     if (maData.length > 0) {{
                         const d = maData.find(x => x.time === t);
@@ -422,6 +434,7 @@ with col_main:
                     }}
                     if (mainLegendEl) mainLegendEl.innerHTML = html;
 
+                    // 2. Vol Legend
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d) {{
@@ -430,14 +443,29 @@ with col_main:
                         }}
                     }}
 
+                    // 3. MACD
                     if (macdLegendEl && macdData.length > 0) {{
                         const d = macdData.find(x => x.time === t);
                         if (d) macdLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color: #E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`;
                     }}
 
+                    // 4. KDJ
                     if (kdjLegendEl && kdjData.length > 0) {{
                         const d = kdjData.find(x => x.time === t);
                         if (d) kdjLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color: #E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">J: ${{d.j.toFixed(3)}}</span></div>`;
+                    }}
+
+                    // 5. ★RSI Legend (新增)
+                    if (rsiLegendEl && rsiData.length > 0) {{
+                        const d = rsiData.find(x => x.time === t);
+                        if (d) {{
+                            rsiLegendEl.innerHTML = `<div class="legend-row">
+                                <span class="legend-label">RSI</span>
+                                <span class="legend-value" style="color: #E6A23C">RSI1: ${{d.rsi6 != null ? d.rsi6.toFixed(3) : '-'}}</span>
+                                <span class="legend-value" style="color: #2196F3">RSI2: ${{d.rsi12 != null ? d.rsi12.toFixed(3) : '-'}}</span>
+                                <span class="legend-value" style="color: #E040FB">RSI3: ${{d.rsi24 != null ? d.rsi24.toFixed(3) : '-'}}</span>
+                            </div>`;
+                        }}
                     }}
                 }}
 
