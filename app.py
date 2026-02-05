@@ -11,10 +11,11 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Ultimate)")
 
 st.markdown("""
 <style>
+    /* 修正頂部被遮擋問題 */
     .block-container {
         padding-top: 3.5rem !important;
         padding-bottom: 1rem;
@@ -24,7 +25,7 @@ st.markdown("""
     h3 {margin-bottom: 0px;}
     div[data-testid="column"] {background-color: #FAFAFA; padding: 10px; border-radius: 5px;}
     
-    /* 按鈕樣式 */
+    /* 按鈕美化 */
     div.stButton > button {
         width: 100%;
         border-radius: 20px;
@@ -39,7 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (最穩定的 V10 邏輯)
+# 2. 資料層 (強力清洗版)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -52,7 +53,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         data.index = data.index.tz_localize(None)
         
-        # 重採樣邏輯
+        # 重採樣
         data.columns = [c.capitalize() for c in data.columns]
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
@@ -64,7 +65,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # --- 指標計算 ---
+        # 指標運算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -87,7 +88,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
-        # 日期處理
+        # 日期
         date_col = None
         for name in ['date', 'datetime', 'timestamp', 'index']:
             if name in data.columns: date_col = name; break
@@ -97,14 +98,14 @@ def get_data(ticker, period="2y", interval="1d"):
         if date_col is None: return None
             
         data['date_obj'] = pd.to_datetime(data[date_col])
-        data['time'] = data['date_obj'].astype('int64') // 10**9 # 秒 (JS用)
-        data = data.sort_values('time') # 確保排序
+        data['time'] = data['date_obj'].astype('int64') // 10**9 
+        data = data.sort_values('time')
         
         return data
     except: return None
 
 # ---------------------------------------------------------
-# 3. 介面控制 (V10 UI)
+# 3. 介面控制
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🔍 股票搜尋")
@@ -144,7 +145,7 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # --- 快捷區間 ---
+    # 快捷區間
     if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m'
     if 'slider_range' not in st.session_state:
         default_start = max_d - timedelta(days=180)
@@ -184,30 +185,35 @@ with col_main:
     def on_slider_change(): st.session_state['active_btn'] = None
     start_date, end_date = st.slider("", min_value=min_d, max_value=max_d, key='slider_range', on_change=on_slider_change, format="YYYY-MM-DD", label_visibility="collapsed")
     
-    # 篩選數據 (Python端)
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. 數據轉 JSON (★關鍵修復★：絕對清洗 NaN)
+    # 4. JSON 序列化 (核心防護：去除 NaN)
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
-        for _, row in df.iterrows():
-            item = {'time': int(row['time'])}
-            valid = True
-            for k, v in cols.items():
-                val = row.get(v)
-                # 強制檢查：是 None, 是 NaN, 或是 Inf -> 全部轉成 None
-                if val is None or pd.isna(val) or np.isinf(val):
-                    # 如果是 K 線數據本身缺失，這根 K 棒無效
-                    if k in ['open','high','low','close']: 
+        # 使用 where 將 NaN 替換為 None，因為 JSON 不支援 NaN
+        df_clean = df.where(pd.notnull(df), None)
+        
+        for _, row in df_clean.iterrows():
+            try:
+                item = {'time': int(row['time'])}
+                valid = True
+                for k, v in cols.items():
+                    val = row.get(v)
+                    # 關鍵修復：如果是 K 線核心數據缺失，則該 K 棒無效
+                    if k in ['open','high','low','close'] and val is None:
                         valid = False; break
-                    # 如果是指標缺失 (如 MA60 前 60 天)，設為 None (JS 會自動不畫)
-                    item[k] = None 
-                else:
-                    item[k] = float(val) # 強制轉為標準 float，避免 numpy 類型造成錯誤
-            if valid: res.append(item)
+                    
+                    # 確保數值是 float 或 None (JS null)
+                    if val is not None:
+                        item[k] = float(val)
+                    else:
+                        item[k] = None
+                
+                if valid: res.append(item)
+            except: continue
         return json.dumps(res)
 
     candles_json = to_json_list(df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
@@ -223,7 +229,7 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript 渲染引擎 (包含 V12 的 Legend)
+    # 5. JavaScript 渲染 (含 Legend + 防護網)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -263,132 +269,163 @@ with col_main:
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
 
         <script>
-            // 數據注入
-            const candlesData = {candles_json};
-            const maData = {ma_json};
-            const bollData = {boll_json};
-            const volData = {vol_json};
-            const macdData = {macd_json};
-            const kdjData = {kdj_json};
-            const rsiData = {rsi_json};
-            const obvData = {obv_json};
-            const biasData = {bias_json};
+            try {{
+                // 數據注入
+                const candlesData = {candles_json};
+                const maData = {ma_json};
+                const bollData = {boll_json};
+                const volData = {vol_json};
+                const macdData = {macd_json};
+                const kdjData = {kdj_json};
+                const rsiData = {rsi_json};
+                const obvData = {obv_json};
+                const biasData = {bias_json};
 
-            const chartOptions = {{
-                layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
-                grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
-                rightPriceScale: {{ borderColor: '#E0E0E0', scaleMargins: {{ top: 0.1, bottom: 0.1 }}, visible: true }},
-                timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-            }};
+                // 防呆：如果沒有 K 線數據，直接結束，避免報錯
+                if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-            function createChart(id, opts) {{
-                const el = document.getElementById(id);
-                if (el.style.display === 'none') return null;
-                return LightweightCharts.createChart(el, opts);
-            }}
+                const chartOptions = {{
+                    layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
+                    grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
+                    rightPriceScale: {{ borderColor: '#E0E0E0', scaleMargins: {{ top: 0.1, bottom: 0.1 }}, visible: true }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+                }};
 
-            const mainChart = createChart('main-chart', chartOptions);
-            const volChart = createChart('vol-chart', {{...chartOptions, rightPriceScale: {{...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}}}}}}); 
-            const macdChart = createChart('macd-chart', chartOptions);
-            const kdjChart = createChart('kdj-chart', chartOptions);
-            const rsiChart = createChart('rsi-chart', chartOptions);
-            const obvChart = createChart('obv-chart', chartOptions);
-            const biasChart = createChart('bias-chart', chartOptions);
-
-            // --- 繪製主圖 ---
-            let candleSeries, ma5Series, ma10Series, ma20Series, ma60Series;
-            let bollUpSeries, bollMidSeries, bollLowSeries;
-
-            if (mainChart) {{
-                candleSeries = mainChart.addCandlestickSeries({{
-                    upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
-                }});
-                candleSeries.setData(candlesData);
-
-                if (bollData.length > 0) {{
-                    bollMidSeries = mainChart.addLineSeries({{ color: '#FF4081', lineWidth: 1, title: 'MID' }}); 
-                    bollUpSeries = mainChart.addLineSeries({{ color: '#FFD700', lineWidth: 1, title: 'UPPER' }});
-                    bollLowSeries = mainChart.addLineSeries({{ color: '#00E5FF', lineWidth: 1, title: 'LOWER' }});
-                    
-                    bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
-                    bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
-                    bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
+                function createChart(id, opts) {{
+                    const el = document.getElementById(id);
+                    if (el.style.display === 'none') return null;
+                    return LightweightCharts.createChart(el, opts);
                 }}
 
-                if (maData.length > 0) {{
-                    if (maData[0].ma5 !== null) {{ ma5Series = mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                    if (maData[0].ma10 !== null) {{ ma10Series = mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                    if (maData[0].ma20 !== null) {{ ma20Series = mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                    if (maData[0].ma60 !== null) {{ ma60Series = mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
-                }}
-            }}
-            
-            // --- 繪製副圖 ---
-            if (volChart && volData.length > 0) {{ volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL' }}).setData(volData); }}
-            if (macdChart && macdData.length > 0) {{
-                macdChart.addLineSeries({{ color: '#FFA500', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
-                macdChart.addLineSeries({{ color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
-                macdChart.addHistogramSeries().setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
-            }}
-            if (kdjChart && kdjData.length > 0) {{
-                kdjChart.addLineSeries({{ color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
-                kdjChart.addLineSeries({{ color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
-            }}
-            if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
-            if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
-            if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
+                const mainChart = createChart('main-chart', chartOptions);
+                const volChart = createChart('vol-chart', {{...chartOptions, rightPriceScale: {{...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}}}}}}); 
+                const macdChart = createChart('macd-chart', chartOptions);
+                const kdjChart = createChart('kdj-chart', chartOptions);
+                const rsiChart = createChart('rsi-chart', chartOptions);
+                const obvChart = createChart('obv-chart', chartOptions);
+                const biasChart = createChart('bias-chart', chartOptions);
 
-            // --- Legend 更新邏輯 ---
-            const legendEl = document.getElementById('main-legend');
-            
-            function updateLegend(param) {{
-                if (!param.time || param.point.x < 0 || param.point.x > mainChart.timeScale().width()) return;
+                // --- 繪製主圖 ---
+                let bollMidSeries, bollUpSeries, bollLowSeries;
+                let ma5Series, ma10Series, ma20Series, ma60Series;
 
-                let html = '';
+                if (mainChart) {{
+                    const candleSeries = mainChart.addCandlestickSeries({{
+                        upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
+                    }});
+                    candleSeries.setData(candlesData);
 
-                // BOLL
-                if (bollData.length > 0) {{
-                    const mid = param.seriesData.get(bollMidSeries)?.value;
-                    const up = param.seriesData.get(bollUpSeries)?.value;
-                    const low = param.seriesData.get(bollLowSeries)?.value;
-                    
-                    if (mid !== undefined) {{
-                        html += `<div class="legend-row">
-                            <span class="legend-label">BOLL</span>
-                            <span class="legend-value" style="color: #FF4081">MID:${{mid.toFixed(2)}}</span>
-                            <span class="legend-value" style="color: #FFD700">UP:${{up.toFixed(2)}}</span>
-                            <span class="legend-value" style="color: #00E5FF">LOW:${{low.toFixed(2)}}</span>
-                        </div>`;
+                    if (bollData.length > 0) {{
+                        bollMidSeries = mainChart.addLineSeries({{ color: '#FF4081', lineWidth: 1, title: 'MID' }}); 
+                        bollUpSeries = mainChart.addLineSeries({{ color: '#FFD700', lineWidth: 1, title: 'UPPER' }});
+                        bollLowSeries = mainChart.addLineSeries({{ color: '#00E5FF', lineWidth: 1, title: 'LOWER' }});
+                        
+                        bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
+                        bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
+                        bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
+                    }}
+
+                    if (maData.length > 0) {{
+                        const first = maData[0];
+                        // 這裡加上 !== null 判斷，防止空數據
+                        if (first.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (first.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (first.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (first.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
-
-                // MA
-                if (maData.length > 0) {{
-                    let maHtml = '<div class="legend-row"><span class="legend-label">EMA</span>';
-                    if (ma5Series) {{ const v = param.seriesData.get(ma5Series)?.value; if(v) maHtml += `<span class="legend-value" style="color: #FFA500">EMA5:${{v.toFixed(2)}}</span> `; }}
-                    if (ma10Series) {{ const v = param.seriesData.get(ma10Series)?.value; if(v) maHtml += `<span class="legend-value" style="color: #2196F3">EMA10:${{v.toFixed(2)}}</span> `; }}
-                    if (ma20Series) {{ const v = param.seriesData.get(ma20Series)?.value; if(v) maHtml += `<span class="legend-value" style="color: #E040FB">EMA20:${{v.toFixed(2)}}</span> `; }}
-                    if (ma60Series) {{ const v = param.seriesData.get(ma60Series)?.value; if(v) maHtml += `<span class="legend-value" style="color: #00E676">EMA60:${{v.toFixed(2)}}</span>`; }}
-                    maHtml += '</div>';
-                    html += maHtml;
+                
+                // --- 繪製副圖 ---
+                if (volChart && volData.length > 0) {{ volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL' }}).setData(volData); }}
+                if (macdChart && macdData.length > 0) {{
+                    macdChart.addLineSeries({{ color: '#FFA500', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
+                    macdChart.addLineSeries({{ color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
+                    macdChart.addHistogramSeries().setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
                 }}
-                legendEl.innerHTML = html;
-            }}
+                if (kdjChart && kdjData.length > 0) {{
+                    kdjChart.addLineSeries({{ color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
+                    kdjChart.addLineSeries({{ color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
+                }}
+                if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
+                if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
+                if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
-            mainChart.subscribeCrosshairMove(updateLegend);
+                // --- Legend 邏輯 (加強防錯) ---
+                const legendEl = document.getElementById('main-legend');
+                
+                // 輔助函數：安全獲取數值
+                function getVal(series) {{
+                    if (!series) return null;
+                    const data = param.seriesData.get(series);
+                    return (data && data.value !== undefined && data.value !== null) ? data.value : null;
+                }}
 
-            // --- 圖表同步 ---
-            const charts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
-            charts.forEach(c => {{
-                c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
-                    if (range) charts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
+                let param = null; // 全局變數暫存
+
+                function updateLegend(p) {{
+                    param = p; // 更新當前 param
+                    if (!param || !param.time || param.point.x < 0 || param.point.x > mainChart.timeScale().width()) return;
+
+                    let html = '';
+
+                    // BOLL
+                    if (bollData.length > 0) {{
+                        const mid = bollMidSeries ? param.seriesData.get(bollMidSeries)?.value : null;
+                        const up = bollUpSeries ? param.seriesData.get(bollUpSeries)?.value : null;
+                        const low = bollLowSeries ? param.seriesData.get(bollLowSeries)?.value : null;
+                        
+                        // 檢查數值是否有效 (不為 null/undefined)
+                        if (mid != null) {{
+                            html += `<div class="legend-row">
+                                <span class="legend-label">BOLL</span>
+                                <span class="legend-value" style="color: #FF4081">MID:${{mid.toFixed(2)}}</span>
+                                <span class="legend-value" style="color: #FFD700">UP:${{up != null ? up.toFixed(2) : '-'}}</span>
+                                <span class="legend-value" style="color: #00E5FF">LOWER:${{low != null ? low.toFixed(2) : '-'}}</span>
+                            </div>`;
+                        }}
+                    }}
+
+                    // MA
+                    if (maData.length > 0) {{
+                        let maHtml = '<div class="legend-row"><span class="legend-label">EMA</span>';
+                        
+                        const v5 = ma5Series ? param.seriesData.get(ma5Series)?.value : null;
+                        if (v5 != null) maHtml += `<span class="legend-value" style="color: #FFA500">EMA5:${{v5.toFixed(2)}}</span> `;
+                        
+                        const v10 = ma10Series ? param.seriesData.get(ma10Series)?.value : null;
+                        if (v10 != null) maHtml += `<span class="legend-value" style="color: #2196F3">EMA10:${{v10.toFixed(2)}}</span> `;
+                        
+                        const v20 = ma20Series ? param.seriesData.get(ma20Series)?.value : null;
+                        if (v20 != null) maHtml += `<span class="legend-value" style="color: #E040FB">EMA20:${{v20.toFixed(2)}}</span> `;
+                        
+                        const v60 = ma60Series ? param.seriesData.get(ma60Series)?.value : null;
+                        if (v60 != null) maHtml += `<span class="legend-value" style="color: #00E676">EMA60:${{v60.toFixed(2)}}</span>`;
+                        
+                        maHtml += '</div>';
+                        html += maHtml;
+                    }}
+                    legendEl.innerHTML = html;
+                }}
+
+                mainChart.subscribeCrosshairMove(updateLegend);
+
+                // --- 圖表同步 ---
+                const charts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
+                charts.forEach(c => {{
+                    c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                        if (range) charts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
+                    }});
                 }});
-            }});
-            
-            window.addEventListener('resize', () => {{
-                charts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
-            }});
+                
+                window.addEventListener('resize', () => {{
+                    charts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
+                }});
+
+            }} catch (e) {{
+                console.error("Chart Render Error:", e);
+                document.body.innerHTML = '<div style="color:red; padding:20px;">Chart Error: ' + e.message + '</div>';
+            }}
         </script>
     </body>
     </html>
