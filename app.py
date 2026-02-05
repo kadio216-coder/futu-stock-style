@@ -95,7 +95,7 @@ def get_data(ticker, period="2y", interval="1d"):
 
         data['OBV'] = ta.obv(data[close_col], data['volume'])
 
-        # ★BIAS 三線 (6, 12, 24)
+        # BIAS
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -275,11 +275,10 @@ with col_main:
             obv_data_list.append(item)
     obv_json = json.dumps(obv_data_list)
     
-    # BIAS 數據
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★全局字體 11px + 強制寬度 130px + BIAS)
+    # 5. JavaScript (★ 核心改動：強制加寬至 160px，確保大數值不撐框)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -290,10 +289,9 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* ★ Legend 字體統一調小 */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
-                font-size: 11px; /* 微調小一點 */
+                font-size: 11px; /* 保持小字體，視覺更精緻 */
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
@@ -339,14 +337,15 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心1：縮小強制寬度到 130 (搭配小字體，剛剛好)
-                const FORCE_WIDTH = 130;
+                // ★核心邏輯：將寬度強制撐大到 160px，包容所有可能的長數字
+                // 這樣所有圖表都固定 160px，絕對對齊
+                const FORCE_WIDTH = 160;
 
                 const commonOptions = {{
                     layout: {{ 
                         backgroundColor: '#FFFFFF', 
                         textColor: '#333333',
-                        fontSize: 11, // ★全局座標軸字體縮小
+                        fontSize: 11,
                     }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
                     rightPriceScale: {{ 
@@ -377,7 +376,7 @@ with col_main:
                 const kdjChart = createChart('kdj-chart', commonOptions);
                 const rsiChart = createChart('rsi-chart', commonOptions);
                 
-                // OBV: 智能單位 + 小數點控制
+                // OBV 智能單位 (億/萬)
                 const obvChart = createChart('obv-chart', {{
                     ...commonOptions,
                     localization: {{ 
@@ -478,7 +477,6 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI</span><span class="legend-value" style="color:#E6A23C">RSI1: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI3: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // OBV Legend (智能單位: 億/萬)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
@@ -489,7 +487,6 @@ with col_main:
                         }}
                     }}
                     
-                    // BIAS Legend
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
@@ -501,7 +498,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // 鎖定寬度 130 + 小字體 11px
+                    // ★核心：強制寫入寬度 160
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     
                     c.subscribeCrosshairMove(updateLegends);
