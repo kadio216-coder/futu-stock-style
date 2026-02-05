@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (OBV Unit Fix)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Final)")
 
 st.markdown("""
 <style>
@@ -63,7 +63,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # --- 指標計算 ---
+        # 指標
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -94,7 +94,6 @@ def get_data(ticker, period="2y", interval="1d"):
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
         data['OBV'] = ta.obv(data[close_col], data['volume'])
-
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
         data = data.reset_index()
@@ -250,7 +249,7 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (OBV 單位修正為 "萬")
+    # 5. JavaScript (★關鍵：鎖定 rightPriceScale minimumWidth)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -311,10 +310,16 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
+                // ★關鍵修改：加入 minimumWidth: 90，強制所有圖表右邊寬度一致，確保對齊
                 const chartOptions = {{
                     layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
-                    rightPriceScale: {{ borderColor: '#E0E0E0', scaleMargins: {{ top: 0.1, bottom: 0.1 }}, visible: true }},
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', 
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }}, 
+                        visible: true,
+                        minimumWidth: 90 // ★鎖定寬度
+                    }},
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
                 }};
@@ -328,14 +333,13 @@ with col_main:
                 const mainChart = createChart('main-chart', chartOptions);
                 const volChart = createChart('vol-chart', {{
                     ...chartOptions, 
-                    rightPriceScale: {{ scaleMargins: {{top: 0.2, bottom: 0}}, visible: true }},
+                    rightPriceScale: {{ ...chartOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }}, // 繼承 minimumWidth
                     localization: {{ priceFormatter: (p) => (p / 10000).toFixed(0) + '萬' }}
                 }});
                 const macdChart = createChart('macd-chart', chartOptions);
                 const kdjChart = createChart('kdj-chart', chartOptions);
                 const rsiChart = createChart('rsi-chart', chartOptions);
                 
-                // ★OBV Chart: Y軸刻度也改成 "萬"
                 const obvChart = createChart('obv-chart', {{
                     ...chartOptions,
                     localization: {{ priceFormatter: (p) => (p / 10000).toFixed(2) + '萬' }}
@@ -397,7 +401,6 @@ with col_main:
                     rsi24Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi24 }})));
                 }}
 
-                // OBV
                 if (obvChart && obvData.length > 0) {{ 
                     obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', lineWidth: 1 }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
                 }}
@@ -476,7 +479,7 @@ with col_main:
                         }}
                     }}
 
-                    // 6. ★OBV Legend (數值除以10000 + 萬)
+                    // 6. OBV
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
