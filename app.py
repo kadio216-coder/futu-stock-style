@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro Volume)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro MACD)")
 
 st.markdown("""
 <style>
@@ -184,7 +184,7 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. JSON 序列化 (成交量邏輯升級)
+    # 4. JSON 序列化 (成交量 & MACD 顏色邏輯)
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
@@ -201,35 +201,53 @@ with col_main:
             except: continue
         return json.dumps(res)
 
-    # 1. K線數據
     candles_json = to_json_list(df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
     
-    # 2. 成交量數據 (★關鍵：在 Python 端計算漲跌顏色)
+    # VOL (紅漲綠跌)
     vol_data_list = []
     if show_vol:
         for _, row in df.iterrows():
             try:
-                # 漲: 紅(#FF5252), 跌: 綠(#00B746)
                 color = '#FF5252' if row['close'] >= row['open'] else '#00B746'
-                vol_data_list.append({
-                    'time': int(row['time']),
-                    'value': float(row['volume']),
-                    'color': color # 這裡直接把顏色寫進去，JS 就會讀到
-                })
+                vol_data_list.append({'time': int(row['time']), 'value': float(row['volume']), 'color': color})
             except: continue
     vol_json = json.dumps(vol_data_list)
     
+    # MACD (紅漲綠跌 + 完整數據)
+    macd_data_list = []
+    if show_macd:
+        # pandas_ta 的欄位名
+        dif_col = 'macd_12_26_9'
+        dea_col = 'macds_12_26_9'
+        hist_col = 'macdh_12_26_9'
+        
+        for _, row in df.iterrows():
+            try:
+                dif = row.get(dif_col)
+                dea = row.get(dea_col)
+                hist = row.get(hist_col)
+                if pd.notnull(dif) and pd.notnull(dea) and pd.notnull(hist):
+                    # 根據 Histogram 正負決定顏色
+                    color = '#FF5252' if hist >= 0 else '#00B746'
+                    macd_data_list.append({
+                        'time': int(row['time']), 
+                        'dif': float(dif), 
+                        'dea': float(dea), 
+                        'hist': float(hist),
+                        'color': color 
+                    })
+            except: continue
+    macd_json = json.dumps(macd_data_list)
+    
     ma_json = to_json_list(df, {'ma5':'ma5', 'ma10':'ma10', 'ma20':'ma20', 'ma60':'ma60'}) if show_ma else "[]"
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
-    
-    macd_json = to_json_list(df, {'dif':'macd_12_26_9', 'dea':'macds_12_26_9', 'hist':'macdh_12_26_9'}) if show_macd else "[]"
     kdj_json = to_json_list(df, {'k':'stochk_14_3_3', 'd':'stochd_14_3_3'}) if show_kdj else "[]"
     rsi_json = to_json_list(df, {'rsi':'rsi'}) if show_rsi else "[]"
     obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (新增 VOL Legend 與 單位格式化)
+    # 5. JavaScript (MACD 專屬優化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -258,7 +276,10 @@ with col_main:
             <div id="vol-legend" class="legend"></div>
         </div>
         
-        <div id="macd-chart" class="chart-container" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};"></div>
+        <div id="macd-chart" class="chart-container" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};">
+            <div id="macd-legend" class="legend"></div>
+        </div>
+        
         <div id="kdj-chart" class="chart-container" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};"></div>
         <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};"></div>
         <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};"></div>
@@ -293,31 +314,23 @@ with col_main:
                 }}
 
                 const mainChart = createChart('main-chart', chartOptions);
-                // ★成交量圖表特殊設定：Y軸格式化為 "萬"
                 const volChart = createChart('vol-chart', {{
                     ...chartOptions, 
-                    rightPriceScale: {{
-                        scaleMargins: {{top: 0.2, bottom: 0}},
-                        visible: true,
-                    }},
-                    localization: {{
-                        priceFormatter: (p) => (p / 10000).toFixed(0) + '萬'
-                    }}
+                    rightPriceScale: {{ scaleMargins: {{top: 0.2, bottom: 0}}, visible: true }},
+                    localization: {{ priceFormatter: (p) => (p / 10000).toFixed(0) + '萬' }}
                 }});
-                
                 const macdChart = createChart('macd-chart', chartOptions);
                 const kdjChart = createChart('kdj-chart', chartOptions);
                 const rsiChart = createChart('rsi-chart', chartOptions);
                 const obvChart = createChart('obv-chart', chartOptions);
                 const biasChart = createChart('bias-chart', chartOptions);
 
-                let volSeries; // 宣告在全域，讓 Legend 存取
+                let volSeries;
                 let bollMidSeries, bollUpSeries, bollLowSeries;
                 let ma5Series, ma10Series, ma20Series, ma60Series;
-                
+
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
-                // 主圖
                 if (mainChart) {{
                     const candleSeries = mainChart.addCandlestickSeries({{
                         upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
@@ -342,23 +355,21 @@ with col_main:
                     }}
                 }}
                 
-                // 副圖 - VOL (設定顏色)
                 if (volChart && volData.length > 0) {{ 
-                    volSeries = volChart.addHistogramSeries({{ 
-                        priceFormat: {{ type: 'volume' }}, 
-                        title: 'VOL', 
-                        priceLineVisible: false 
-                    }});
-                    // 這裡的 data 已經在 Python 端帶有 color 屬性了，所以會自動變色
+                    volSeries = volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL', priceLineVisible: false }});
                     volSeries.setData(volData); 
                 }}
 
-                // 其他副圖
+                // ★MACD 繪圖 (依照截圖顏色)
                 if (macdChart && macdData.length > 0) {{
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
-                    macdChart.addHistogramSeries({{ priceLineVisible: false }}).setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
+                    // DIF: 橘色 #E6A23C
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
+                    // DEA: 藍色 #2196F3
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
+                    // MACD Histogram: 自動紅綠
+                    macdChart.addHistogramSeries({{ priceLineVisible: false }}).setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.color }})));
                 }}
+
                 if (kdjChart && kdjData.length > 0) {{
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
@@ -367,15 +378,16 @@ with col_main:
                 if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
                 if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
-                // --- 雙 Legend 更新邏輯 ---
+                // --- 3個 Legend 更新邏輯 ---
                 const mainLegendEl = document.getElementById('main-legend');
-                const volLegendEl = document.getElementById('vol-legend'); // 抓取 VOL Legend
+                const volLegendEl = document.getElementById('vol-legend');
+                const macdLegendEl = document.getElementById('macd-legend');
 
                 function updateLegends(param) {{
-                    // 如果滑鼠在主圖外，檢查是否在副圖...這裡簡化：只要有數據就更新
                     if (!param || !param.time) return;
+                    const t = param.time;
 
-                    // 1. 更新主圖 Legend
+                    // 1. Main Chart
                     let html = '';
                     if (bollData.length > 0) {{
                         const mid = bollMidSeries ? param.seriesData.get(bollMidSeries)?.value : null;
@@ -398,33 +410,34 @@ with col_main:
                     }}
                     mainLegendEl.innerHTML = html;
 
-                    // 2. 更新 VOL Legend (加上 "萬" 字)
+                    // 2. Vol Legend
                     if (volLegendEl && volSeries) {{
-                        // 注意：因為 VOL 是另一個圖表，param.seriesData 可能抓不到，要用時間去對應
-                        // 但 lightweight-charts 的 crosshair 同步後，param 可能來自任何一個圖表
-                        // 最簡單的方法是：直接用 param.time 去原始陣列找，或者依賴 param.seriesData (如果滑鼠剛好在 VOL 上)
-                        
-                        // 這裡我們用一個 trick：用時間去找原始數據
-                        const t = param.time;
-                        // 找到對應時間的 vol 數據 (假設 volData 是排序的，可以用 find 或 filter，效能尚可因為數據量不大)
                         const volItem = volData.find(d => d.time === t);
-                        
                         if (volItem) {{
                             const valInWan = (volItem.value / 10000).toFixed(2);
-                            // 顏色跟隨柱子顏色 (volItem.color) 或固定黑色
-                            volLegendEl.innerHTML = `<div class="legend-row">
-                                <span class="legend-label">成交量</span>
-                                <span class="legend-value" style="color: ${{volItem.color}}">VOL: ${{valInWan}}萬</span>
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{volItem.color}}">VOL: ${{valInWan}}萬</span></div>`;
+                        }}
+                    }}
+
+                    // 3. ★MACD Legend (依照截圖樣式)
+                    if (macdLegendEl && macdData.length > 0) {{
+                        const macdItem = macdData.find(d => d.time === t);
+                        if (macdItem) {{
+                            // 顏色定義：DIF(橘), DEA(藍), MACD(紫)
+                            macdLegendEl.innerHTML = `<div class="legend-row">
+                                <span class="legend-label">MACD</span>
+                                <span class="legend-value" style="color: #E6A23C">DIF: ${{macdItem.dif.toFixed(3)}}</span>
+                                <span class="legend-value" style="color: #2196F3">DEA: ${{macdItem.dea.toFixed(3)}}</span>
+                                <span class="legend-value" style="color: #E040FB">MACD: ${{macdItem.hist.toFixed(3)}}</span>
                             </div>`;
                         }}
                     }}
                 }}
 
-                // 訂閱所有圖表的十字游標
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    c.subscribeCrosshairMove(updateLegends); // 所有圖表移動都觸發更新
+                    c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                         if (range) allCharts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
                     }});
