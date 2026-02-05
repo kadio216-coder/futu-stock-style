@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Final)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Aligned)")
 
 st.markdown("""
 <style>
@@ -63,7 +63,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 指標
+        # 指標運算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -200,7 +200,7 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. JSON 序列化
+    # 4. JSON 序列化 (★關鍵修復：所有指標填充 NULL，確保長度一致)
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
@@ -208,26 +208,42 @@ with col_main:
         for _, row in df_clean.iterrows():
             try:
                 item = {'time': int(row['time'])}
-                valid = True
+                # 這裡不進行 valid 檢查來跳過 row，而是保留 row，指標值為 null
+                # 這樣能保證時間軸 100% 對齊
+                has_data = False
                 for k, v in cols.items():
                     val = row.get(v)
-                    if k in ['open','high','low','close'] and val is None: valid = False; break
+                    # 如果是 OHLC 缺失，則這行真的沒用，可以跳過 (因為主圖都沒了)
+                    if k in ['open','high','low','close'] and val is None:
+                        has_data = False; break
+                    
                     item[k] = float(val) if val is not None else None
-                if valid: res.append(item)
+                    has_data = True
+                
+                if has_data: res.append(item)
             except: continue
         return json.dumps(res)
 
     candles_json = to_json_list(df, {'open':'open', 'high':'high', 'low':'low', 'close':'close'})
     
+    # VOL (重寫：確保長度一致，包含 null)
     vol_data_list = []
     if show_vol:
         for _, row in df.iterrows():
             try:
-                color = '#FF5252' if row['close'] >= row['open'] else '#00B746'
-                vol_data_list.append({'time': int(row['time']), 'value': float(row['volume']), 'color': color})
+                v = row.get('volume')
+                c = row.get('close')
+                o = row.get('open')
+                if pd.notnull(v) and pd.notnull(c) and pd.notnull(o):
+                    color = '#FF5252' if c >= o else '#00B746'
+                    vol_data_list.append({'time': int(row['time']), 'value': float(v), 'color': color})
+                else:
+                    # 補一個空點，保持對齊
+                    vol_data_list.append({'time': int(row['time']), 'value': None}) 
             except: continue
     vol_json = json.dumps(vol_data_list)
     
+    # MACD (重寫：確保長度一致)
     macd_data_list = []
     if show_macd:
         for _, row in df.iterrows():
@@ -235,9 +251,12 @@ with col_main:
                 dif = row.get('macd_12_26_9')
                 dea = row.get('macds_12_26_9')
                 hist = row.get('macdh_12_26_9')
+                item = {'time': int(row['time'])}
                 if pd.notnull(dif) and pd.notnull(dea) and pd.notnull(hist):
-                    color = '#FF5252' if hist >= 0 else '#00B746'
-                    macd_data_list.append({'time': int(row['time']), 'dif': float(dif), 'dea': float(dea), 'hist': float(hist), 'color': color})
+                    item.update({'dif': float(dif), 'dea': float(dea), 'hist': float(hist), 'color': '#FF5252' if hist >= 0 else '#00B746'})
+                else:
+                    item.update({'dif': None, 'dea': None, 'hist': None}) # 補空值
+                macd_data_list.append(item)
             except: continue
     macd_json = json.dumps(macd_data_list)
     
@@ -245,11 +264,22 @@ with col_main:
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
     kdj_json = to_json_list(df, {'k':'k', 'd':'d', 'j':'j'}) if show_kdj else "[]"
     rsi_json = to_json_list(df, {'rsi6':'rsi6', 'rsi12':'rsi12', 'rsi24':'rsi24'}) if show_rsi else "[]"
-    obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
+    
+    # OBV (重寫：確保長度)
+    obv_data_list = []
+    if show_obv:
+        for _, row in df.iterrows():
+            item = {'time': int(row['time'])}
+            val = row.get('obv')
+            if pd.notnull(val): item['obv'] = float(val)
+            else: item['obv'] = None
+            obv_data_list.append(item)
+    obv_json = json.dumps(obv_data_list)
+    
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★關鍵修改：minimumWidth: 120)
+    # 5. JavaScript (★關鍵：minimumWidth: 160)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -259,7 +289,6 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
-            
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 12px; line-height: 18px; font-weight: 500; pointer-events: none;
@@ -310,8 +339,7 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心修改：將 minimumWidth 增加到 120
-                // 這樣無論 OBV 的「萬」字佔多寬，其他圖表都會強制保留 120px，保證完全對齊
+                // ★核心修改：強制加寬到 160，確保容納所有長度的標籤
                 const chartOptions = {{
                     layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333' }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
@@ -319,7 +347,7 @@ with col_main:
                         borderColor: '#E0E0E0', 
                         scaleMargins: {{ top: 0.1, bottom: 0.1 }}, 
                         visible: true,
-                        minimumWidth: 120 
+                        minimumWidth: 160
                     }},
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
@@ -369,10 +397,10 @@ with col_main:
 
                     if (maData.length > 0) {{
                         const f = maData[0];
-                        if (f.ma5 !== null) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                        if (f.ma10 !== null) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                        if (f.ma20 !== null) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                        if (f.ma60 !== null) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
                 
@@ -429,7 +457,7 @@ with col_main:
                     if (bollData.length > 0) {{
                         const d = bollData.find(x => x.time === t);
                         if (d) {{
-                            html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`;
+                            html += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid != null ? d.mid.toFixed(2) : '-'}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`;
                         }}
                     }}
                     if (maData.length > 0) {{
@@ -449,7 +477,7 @@ with col_main:
                     // 2. Vol Legend
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
-                        if (d) {{
+                        if (d && d.value != null) {{
                             const valInWan = (d.value / 10000).toFixed(2);
                             volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{valInWan}}萬</span></div>`;
                         }}
@@ -458,13 +486,13 @@ with col_main:
                     // 3. MACD
                     if (macdLegendEl && macdData.length > 0) {{
                         const d = macdData.find(x => x.time === t);
-                        if (d) macdLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color: #E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`;
+                        if (d && d.dif != null) macdLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color: #E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`;
                     }}
 
                     // 4. KDJ
                     if (kdjLegendEl && kdjData.length > 0) {{
                         const d = kdjData.find(x => x.time === t);
-                        if (d) kdjLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color: #E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">J: ${{d.j.toFixed(3)}}</span></div>`;
+                        if (d && d.k != null) kdjLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color: #E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">J: ${{d.j.toFixed(3)}}</span></div>`;
                     }}
 
                     // 5. RSI
