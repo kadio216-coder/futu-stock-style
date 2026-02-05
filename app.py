@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (V13 強力清洗)
+# 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -183,7 +183,7 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. 數據轉 JSON (去除 NaN)
+    # 4. JSON 序列化
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
@@ -213,7 +213,7 @@ with col_main:
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (版本鎖定 @3.8.0)
+    # 5. JavaScript (隱藏價格線版)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -283,6 +283,9 @@ with col_main:
                 let bollMidSeries, bollUpSeries, bollLowSeries;
                 let ma5Series, ma10Series, ma20Series, ma60Series;
 
+                // 共用線條設定：隱藏價格線 (priceLineVisible: false)
+                const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
+
                 if (mainChart) {{
                     const candleSeries = mainChart.addCandlestickSeries({{
                         upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
@@ -290,9 +293,9 @@ with col_main:
                     candleSeries.setData(candlesData);
 
                     if (bollData.length > 0) {{
-                        bollMidSeries = mainChart.addLineSeries({{ color: '#FF4081', lineWidth: 1, title: 'MID' }}); 
-                        bollUpSeries = mainChart.addLineSeries({{ color: '#FFD700', lineWidth: 1, title: 'UPPER' }});
-                        bollLowSeries = mainChart.addLineSeries({{ color: '#00E5FF', lineWidth: 1, title: 'LOWER' }});
+                        bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FF4081', title: 'MID' }}); 
+                        bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
+                        bollLowSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOWER' }});
                         bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
                         bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
                         bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
@@ -300,26 +303,26 @@ with col_main:
 
                     if (maData.length > 0) {{
                         const f = maData[0];
-                        if (f.ma5 !== null) {{ ma5Series = mainChart.addLineSeries({{ color: '#FFA500', lineWidth: 1, title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                        if (f.ma10 !== null) {{ ma10Series = mainChart.addLineSeries({{ color: '#2196F3', lineWidth: 1, title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                        if (f.ma20 !== null) {{ ma20Series = mainChart.addLineSeries({{ color: '#E040FB', lineWidth: 1, title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                        if (f.ma60 !== null) {{ ma60Series = mainChart.addLineSeries({{ color: '#00E676', lineWidth: 1, title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                        if (f.ma5 !== null) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'EMA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (f.ma10 !== null) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'EMA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (f.ma20 !== null) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'EMA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (f.ma60 !== null) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'EMA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
                 
-                if (volChart && volData.length > 0) {{ volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL' }}).setData(volData); }}
+                if (volChart && volData.length > 0) {{ volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL', priceLineVisible: false }}).setData(volData); }}
                 if (macdChart && macdData.length > 0) {{
-                    macdChart.addLineSeries({{ color: '#FFA500', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
-                    macdChart.addLineSeries({{ color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
-                    macdChart.addHistogramSeries().setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
+                    macdChart.addHistogramSeries({{ priceLineVisible: false }}).setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.hist > 0 ? '#FF5252' : '#00B746' }})));
                 }}
                 if (kdjChart && kdjData.length > 0) {{
-                    kdjChart.addLineSeries({{ color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
-                    kdjChart.addLineSeries({{ color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
                 }}
-                if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
-                if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
-                if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
+                if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
+                if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
+                if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
                 const legendEl = document.getElementById('main-legend');
                 let param = null;
