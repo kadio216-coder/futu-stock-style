@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro RSI)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Pro OBV)")
 
 st.markdown("""
 <style>
@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (新增 RSI 6, 12, 24)
+# 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -90,12 +90,14 @@ def get_data(ticker, period="2y", interval="1d"):
                 data['j'] = 3 * data['k'] - 2 * data['d']
             except IndexError: pass
 
-        # ★RSI 三線計算 (6, 12, 24)
+        # RSI
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
+        # ★OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
+
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
         data = data.reset_index()
@@ -246,15 +248,15 @@ with col_main:
     ma_json = to_json_list(df, {'ma5':'ma5', 'ma10':'ma10', 'ma20':'ma20', 'ma60':'ma60'}) if show_ma else "[]"
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
     kdj_json = to_json_list(df, {'k':'k', 'd':'d', 'j':'j'}) if show_kdj else "[]"
-    
-    # ★RSI 數據包：包含 RSI6, 12, 24
     rsi_json = to_json_list(df, {'rsi6':'rsi6', 'rsi12':'rsi12', 'rsi24':'rsi24'}) if show_rsi else "[]"
     
+    # ★OBV 數據
     obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
+    
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (新增 RSI 三線繪圖與 Legend)
+    # 5. JavaScript (新增 OBV 繪圖與 Legend)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -295,7 +297,10 @@ with col_main:
             <div id="rsi-legend" class="legend"></div>
         </div>
         
-        <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};"></div>
+        <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};">
+            <div id="obv-legend" class="legend"></div>
+        </div>
+        
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
 
         <script>
@@ -383,18 +388,20 @@ with col_main:
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', lineWidth: 1 }}).setData(kdjData.map(d => ({{ time: d.time, value: d.j }})));
                 }}
 
-                // ★RSI 繪圖 (依照截圖配色: RSI1=橘, RSI2=藍, RSI3=紫)
                 if (rsiChart && rsiData.length > 0) {{
                     rsi6Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }});
                     rsi12Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }});
                     rsi24Series = rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB', lineWidth: 1 }});
-                    
                     rsi6Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi6 }})));
                     rsi12Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi12 }})));
                     rsi24Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi24 }})));
                 }}
 
-                if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
+                // ★OBV 繪圖 (金黃色 #FFD700)
+                if (obvChart && obvData.length > 0) {{ 
+                    obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', lineWidth: 1 }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
+                }}
+
                 if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
 
                 const mainLegendEl = document.getElementById('main-legend');
@@ -402,6 +409,7 @@ with col_main:
                 const macdLegendEl = document.getElementById('macd-legend');
                 const kdjLegendEl = document.getElementById('kdj-legend');
                 const rsiLegendEl = document.getElementById('rsi-legend');
+                const obvLegendEl = document.getElementById('obv-legend');
 
                 function updateLegends(param) {{
                     let t;
@@ -455,7 +463,7 @@ with col_main:
                         if (d) kdjLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color: #E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">J: ${{d.j.toFixed(3)}}</span></div>`;
                     }}
 
-                    // 5. ★RSI Legend (新增)
+                    // 5. RSI
                     if (rsiLegendEl && rsiData.length > 0) {{
                         const d = rsiData.find(x => x.time === t);
                         if (d) {{
@@ -464,6 +472,19 @@ with col_main:
                                 <span class="legend-value" style="color: #E6A23C">RSI1: ${{d.rsi6 != null ? d.rsi6.toFixed(3) : '-'}}</span>
                                 <span class="legend-value" style="color: #2196F3">RSI2: ${{d.rsi12 != null ? d.rsi12.toFixed(3) : '-'}}</span>
                                 <span class="legend-value" style="color: #E040FB">RSI3: ${{d.rsi24 != null ? d.rsi24.toFixed(3) : '-'}}</span>
+                            </div>`;
+                        }}
+                    }}
+
+                    // 6. ★OBV Legend (新增：金黃色 + 千分位)
+                    if (obvLegendEl && obvData.length > 0) {{
+                        const d = obvData.find(x => x.time === t);
+                        if (d && d.obv != null) {{
+                            // 使用 toLocaleString() 加上千分位
+                            const valStr = d.obv.toLocaleString();
+                            obvLegendEl.innerHTML = `<div class="legend-row">
+                                <span class="legend-label">OBV</span>
+                                <span class="legend-value" style="color: #FFD700">OBV: ${{valStr}}</span>
                             </div>`;
                         }}
                     }}
