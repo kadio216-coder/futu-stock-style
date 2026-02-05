@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層
+# 2. 資料層 (新增 KDJ 的 J 值計算)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -62,7 +62,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 指標
+        # --- 指標計算 ---
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -76,9 +76,20 @@ def get_data(ticker, period="2y", interval="1d"):
         
         macd = ta.macd(data[close_col])
         if macd is not None: data = pd.concat([data, macd], axis=1)
-        data['RSI'] = ta.rsi(data[close_col], length=14)
+        
+        # ★KDJ 計算 (J = 3K - 2D)
         stoch = ta.stoch(data['high'], data['low'], data[close_col])
-        if stoch is not None: data = pd.concat([data, stoch], axis=1)
+        if stoch is not None: 
+            data = pd.concat([data, stoch], axis=1)
+            # pandas_ta 的欄位通常是 stochk_14_3_3, stochd_14_3_3
+            # 我們這裡動態抓取欄位名稱
+            k_col = [c for c in data.columns if c.startswith('stochk')][0]
+            d_col = [c for c in data.columns if c.startswith('stochd')][0]
+            data['k'] = data[k_col]
+            data['d'] = data[d_col]
+            data['j'] = 3 * data['k'] - 2 * data['d'] # 手動計算 J 值
+
+        data['RSI'] = ta.rsi(data[close_col], length=14)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['BIAS'] = (data[close_col] - data['MA20']) / data['MA20'] * 100
         
@@ -184,7 +195,7 @@ with col_main:
     if df.empty: st.stop()
 
     # ---------------------------------------------------------
-    # 4. JSON 序列化
+    # 4. JSON 序列化 (包含 KDJ 三線)
     # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
@@ -227,13 +238,16 @@ with col_main:
     
     ma_json = to_json_list(df, {'ma5':'ma5', 'ma10':'ma10', 'ma20':'ma20', 'ma60':'ma60'}) if show_ma else "[]"
     boll_json = to_json_list(df, {'up':'boll_upper', 'mid':'boll_mid', 'low':'boll_lower'}) if show_boll else "[]"
-    kdj_json = to_json_list(df, {'k':'stochk_14_3_3', 'd':'stochd_14_3_3'}) if show_kdj else "[]"
+    
+    # ★KDJ 數據包：包含 K, D, J 三線
+    kdj_json = to_json_list(df, {'k':'k', 'd':'d', 'j':'j'}) if show_kdj else "[]"
+    
     rsi_json = to_json_list(df, {'rsi':'rsi'}) if show_rsi else "[]"
     obv_json = to_json_list(df, {'obv':'obv'}) if show_obv else "[]"
     bias_json = to_json_list(df, {'bias':'bias'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (初始化即顯示 Legend)
+    # 5. JavaScript (新增 KDJ 三線繪圖與 Legend)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -245,7 +259,7 @@ with col_main:
             .chart-container {{ position: relative; width: 100%; }}
             
             .legend {{
-                position: absolute; top: 10px; left: 10px; z-index: 100; /* 加大 z-index 確保最上層 */
+                position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 12px; line-height: 18px; font-weight: 500; pointer-events: none;
             }}
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
@@ -266,7 +280,10 @@ with col_main:
             <div id="macd-legend" class="legend"></div>
         </div>
         
-        <div id="kdj-chart" class="chart-container" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};"></div>
+        <div id="kdj-chart" class="chart-container" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};">
+            <div id="kdj-legend" class="legend"></div>
+        </div>
+        
         <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};"></div>
         <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};"></div>
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};"></div>
@@ -349,10 +366,16 @@ with col_main:
                     macdChart.addHistogramSeries({{ priceLineVisible: false }}).setData(macdData.map(d => ({{ time: d.time, value: d.hist, color: d.color }})));
                 }}
                 
+                // ★KDJ 繪圖 (依照截圖配色: K=橘, D=藍, J=紫)
                 if (kdjChart && kdjData.length > 0) {{
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
+                    // K Line: Orange
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }}).setData(kdjData.map(d => ({{ time: d.time, value: d.k }})));
+                    // D Line: Blue
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }}).setData(kdjData.map(d => ({{ time: d.time, value: d.d }})));
+                    // J Line: Purple
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', lineWidth: 1 }}).setData(kdjData.map(d => ({{ time: d.time, value: d.j }})));
                 }}
+
                 if (rsiChart && rsiData.length > 0) {{ rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d => ({{ time: d.time, value: d.rsi }}))); }}
                 if (obvChart && obvData.length > 0) {{ obvChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'volume' }} }}).setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); }}
                 if (biasChart && biasData.length > 0) {{ biasChart.addLineSeries({{ ...lineOpts, color: '#607D8B' }}).setData(biasData.map(d => ({{ time: d.time, value: d.bias }}))); }}
@@ -360,9 +383,9 @@ with col_main:
                 const mainLegendEl = document.getElementById('main-legend');
                 const volLegendEl = document.getElementById('vol-legend');
                 const macdLegendEl = document.getElementById('macd-legend');
+                const kdjLegendEl = document.getElementById('kdj-legend');
 
                 function updateLegends(param) {{
-                    // 如果沒有傳入 param (例如初始化)，我們自己造一個「最後時間」的 param
                     let t;
                     if (!param || !param.time) {{
                         if (candlesData.length > 0) t = candlesData[candlesData.length - 1].time;
@@ -409,9 +432,16 @@ with col_main:
                             macdLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color: #E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`;
                         }}
                     }}
+
+                    // 4. ★KDJ Legend (新增)
+                    if (kdjLegendEl && kdjData.length > 0) {{
+                        const d = kdjData.find(x => x.time === t);
+                        if (d) {{
+                            kdjLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color: #E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color: #2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color: #E040FB">J: ${{d.j.toFixed(3)}}</span></div>`;
+                        }}
+                    }}
                 }}
 
-                // 訂閱 Crosshair
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 allCharts.forEach(c => {{
                     c.subscribeCrosshairMove(updateLegends);
@@ -420,8 +450,7 @@ with col_main:
                     }});
                 }});
                 
-                // ★關鍵：初始化時，手動呼叫一次 updateLegends，顯示最後一筆數據
-                updateLegends(null); // 傳 null 會觸發自動抓最後一筆的邏輯
+                updateLegends(null); 
 
                 window.addEventListener('resize', () => {{
                     allCharts.forEach(c => c.resize(document.body.clientWidth, c.options().height));
