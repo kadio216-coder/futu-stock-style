@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：智慧去零 formatter)
+    # 5. JavaScript (★ 核心：Main Chart = Standard 2 Decimal)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -389,16 +389,13 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★ Smart Formatter Logic:
-                // 1. 先格式化為 2 位小數 (1780.00, 1780.50)
-                // 2. 如果尾數是 .00 -> 刪掉 (變成 1780) -> 座標軸變整數，乾淨
-                // 3. 如果尾數是 .50 -> 保留 (變成 1780.50) -> 標籤保留精度
-                function formatSmart2(val) {{
+                // 一般格式化 (強制 2 位)
+                function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
-                    let s = val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
-                    return s.endsWith('.00') ? s.slice(0, -3) : s;
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
+                // 智慧去零 (給副圖用)
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     return parseFloat(val.toFixed(3)).toString();
@@ -416,11 +413,6 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                function formatFixed2(val) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toFixed(2);
-                }}
-                
                 function formatFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toFixed(3);
@@ -434,10 +426,11 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★ 1. Main Chart: 使用 formatSmart2 (整數去零，非整數保留)
+                // ★ 1. Main Chart: 使用 formatStandard (強制2位小數)
+                // 這樣 .00 也會顯示 (1780.00)，座標軸跟紅底標籤一致
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatSmart2(p) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 2) }} 
                 }});
                 
                 // 2. VOL Chart
