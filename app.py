@@ -34,6 +34,31 @@ st.markdown("""
     }
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
+    
+    /* 策略儀表板樣式 (改為4格) */
+    .strategy-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr); 
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+    .strat-card {
+        background-color: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+        font-family: "Segoe UI", sans-serif;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .strat-active {
+        background-color: #E8F5E9; /* 亮綠底 */
+        border: 1px solid #4CAF50;
+    }
+    .strat-title { font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px; }
+    .strat-status { font-size: 14px; font-weight: bold; color: #333; }
+    .status-match { color: #2E7D32; } /* 符合條件 */
+    .status-wait { color: #9E9E9E; }  /* 未符合 */
 </style>
 """, unsafe_allow_html=True)
 
@@ -52,7 +77,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (V78: MACD長線 + OBV半年)
+# 3. 資料層 (V78架構 + MA120)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -60,7 +85,6 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
-        # 1. 下載 2年 資料
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
@@ -82,11 +106,12 @@ def get_data(ticker, period="2y", interval="1d"):
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 2. 計算長週期指標
+        # --- 指標計算 ---
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
         data['MA60'] = ta.sma(data[close_col], length=60)
+        data['MA120'] = ta.sma(data[close_col], length=120)
         
         data['boll_mid'] = data[close_col].rolling(window=20).mean()
         data['boll_std'] = data[close_col].rolling(window=20).std()
@@ -114,10 +139,10 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # 3. ★ 資料截斷：保留最後半年 (130天)
+        # ★ 資料截斷 (V78: 保留半年)
         data = data.tail(130).copy()
 
-        # 4. ★ 重算 OBV
+        # ★ 重算 OBV (V78: 基於半年)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
@@ -141,6 +166,74 @@ def get_data(ticker, period="2y", interval="1d"):
         print(f"Data Error: {e}")
         return None
 
+# --- ★ 四大策略偵測邏輯 ---
+def check_4_strategies(df):
+    if len(df) < 30: return {}
+    
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    results = {}
+    
+    # 1. 盤整後帶量突破
+    # 條件：20天震幅<15% + 突破高點 + 量>5日均量*2
+    past_20 = df.iloc[-21:-1] # 過去20天 (不含當天)
+    box_high = past_20['high'].max()
+    box_low = past_20['low'].min()
+    amp = (box_high - box_low) / box_low
+    vol_ma5 = df['volume'].iloc[-6:-1].mean()
+    if vol_ma5 == 0: vol_ma5 = 1
+    
+    cond1_box = amp < 0.15
+    cond1_break = curr['close'] > box_high
+    cond1_vol = curr['volume'] > (vol_ma5 * 2)
+    
+    if cond1_box and cond1_break and cond1_vol:
+        results['S1'] = {'active': True, 'msg': '🚀 帶量突破'}
+    elif not cond1_box:
+        results['S1'] = {'active': False, 'msg': '波動過大'}
+    else:
+        results['S1'] = {'active': False, 'msg': '整理中'}
+
+    # 2. 均線黃金交叉
+    # 條件：MA20上穿MA60 + 股價>MA120
+    cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
+    cond2_trend = curr['close'] > curr['ma120']
+    
+    if cond2_cross and cond2_trend:
+        results['S2'] = {'active': True, 'msg': '🌟 黃金交叉'}
+    elif curr['ma20'] > curr['ma60']:
+        results['S2'] = {'active': False, 'msg': '多頭排列'}
+    else:
+        results['S2'] = {'active': False, 'msg': '空頭/整理'}
+
+    # 3. 布林通道擠壓
+    # 條件：開口<10% + 突破上軌
+    bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
+    cond3_squeeze = bw < 0.10
+    cond3_break = curr['close'] > curr['boll_upper']
+    
+    if cond3_squeeze and cond3_break:
+        results['S3'] = {'active': True, 'msg': '💥 擠壓噴出'}
+    elif cond3_squeeze:
+        results['S3'] = {'active': False, 'msg': '壓縮蓄力'}
+    else:
+        results['S3'] = {'active': False, 'msg': '通道張開'}
+
+    # 4. KD 低檔黃金交叉
+    # 條件：K<20 + K穿過D
+    cond4_low = curr['k'] < 20
+    cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
+    
+    if cond4_low and cond4_cross:
+        results['S4'] = {'active': True, 'msg': '🎣 低檔金叉'}
+    elif curr['k'] < 20:
+        results['S4'] = {'active': False, 'msg': '超賣鈍化'}
+    else:
+        results['S4'] = {'active': False, 'msg': '一般區間'}
+    
+    return results
+
 col_main, col_tools = st.columns([0.85, 0.15])
 
 with col_tools:
@@ -163,11 +256,41 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
+    # ★ V78: 資料只有 130 天
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
         st.stop()
+    
+    # ★ 顯示四大策略儀表板
+    strats = check_4_strategies(full_df)
+    if strats:
+        s1 = strats['S1']
+        s2 = strats['S2']
+        s3 = strats['S3']
+        s4 = strats['S4']
+        
+        st.markdown(f"""
+        <div class="strategy-grid">
+            <div class="strat-card {'strat-active' if s1['active'] else ''}">
+                <div class="strat-title">1.盤整飆股</div>
+                <div class="strat-status { 'status-match' if s1['active'] else 'status-wait' }">{s1['msg']}</div>
+            </div>
+            <div class="strat-card {'strat-active' if s2['active'] else ''}">
+                <div class="strat-title">2.黃金交叉</div>
+                <div class="strat-status { 'status-match' if s2['active'] else 'status-wait' }">{s2['msg']}</div>
+            </div>
+            <div class="strat-card {'strat-active' if s3['active'] else ''}">
+                <div class="strat-title">3.布林擠壓</div>
+                <div class="strat-status { 'status-match' if s3['active'] else 'status-wait' }">{s3['msg']}</div>
+            </div>
+            <div class="strat-card {'strat-active' if s4['active'] else ''}">
+                <div class="strat-title">4.KD抄底</div>
+                <div class="strat-status { 'status-match' if s4['active'] else 'status-wait' }">{s4['msg']}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
@@ -276,7 +399,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V78 嚴格版)
+    # 5. JavaScript (★ 核心：V78架構 + MA先畫)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -355,10 +478,10 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 字體 11px (V78原設)
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 1. 主圖: 字體 14.5px (V78/V86)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14.5 }};
                 
-                // 2. 副圖: 透明
+                // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -414,7 +537,8 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                const mainChart = createChart('main-chart', {{
+                // ★ V78: 主圖強制 toFixed(3)
+                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
@@ -443,7 +567,7 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ OBV Chart: Axis = formatOBVAxis (整數)
+                // ★ OBV Chart: formatBigFixed3 (Legend) + formatOBVAxis (Axis)
                 const obvChart = createChart('obv-chart', {{
                     layout: volObvLayout, 
                     grid: grid, 
@@ -471,7 +595,7 @@ with col_main:
                     }});
                     candleSeries.setData(candlesData);
 
-                    // ★ V78: 先畫 MA (底層)
+                    // ★ V83修正：先畫 MA (底層)
                     if (maData.length > 0) {{
                         const f = maData[0];
                         if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
@@ -480,7 +604,7 @@ with col_main:
                         if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
 
-                    // ★ V78: 後畫 BOLL (上層)，確保 MID 蓋住 MA20
+                    // ★ V83修正：後畫 BOLL (上層)，確保 MID 蓋住 MA20
                     if (bollData.length > 0) {{
                         bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID' }}); 
                         bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
@@ -547,7 +671,7 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ★ V78: 主圖數值強制 toFixed(3)
+                    // ★ V78: 主圖 Legend 使用 toFixed(3)
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
@@ -613,7 +737,7 @@ with col_main:
     if show_obv: total_height += 120
     if show_bias: total_height += 120
     
-    # ★ 緩衝高度 +50px (V78)
+    # ★ 緩衝高度 (V78)
     total_height += 50
 
     components.html(html_code, height=total_height)
