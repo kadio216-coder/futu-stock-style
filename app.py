@@ -78,7 +78,7 @@ def get_data(ticker, period="6mo", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 台股成交量除以 1000
+        # 台股成交量轉「張」
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
@@ -285,7 +285,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：全指標整數化 + 主圖整數化)
+    # 5. JavaScript (★ 核心：字體分層 + 整數化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -352,8 +352,10 @@ with col_main:
 
                 const FORCE_WIDTH = 115;
 
-                const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
+                // 1. 主圖字體 (11px)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 2. 副圖指標字體 (13px) - 除主圖外的所有指標
+                const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
@@ -379,13 +381,13 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般整數格式化 (無中文單位)
+                // 一般整數格式化
                 function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: 0, maximumFractionDigits: 0 }});
                 }}
 
-                // VOL/OBV 專用: 中文單位 + 整數
+                // 中文單位 + 整數 (VOL/OBV)
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -394,45 +396,45 @@ with col_main:
                     return val.toFixed(0);
                 }}
 
-                // ★1. Main: 加上 priceFormatter (整數)
+                // ★1. Main: 11px (mainLayout) + 整數
                 const mainChart = createChart('main-chart', {{
-                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // 2. VOL: 9px + 中文整數
+                // ★2. VOL: 13px (indicatorLayout) + 中文整數
                 const volChart = createChart('vol-chart', {{
-                    ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
+                    ...getOpts(indicatorLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 3. MACD: 整數
+                // ★3. MACD: 13px (indicatorLayout) + 整數
                 const macdChart = createChart('macd-chart', {{
-                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 4. KDJ: 整數
+                // ★4. KDJ: 13px + 整數
                 const kdjChart = createChart('kdj-chart', {{
-                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 5. RSI: 整數
+                // ★5. RSI: 13px + 整數
                 const rsiChart = createChart('rsi-chart', {{
-                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 6. OBV: 9px + 中文整數
+                // ★6. OBV: 13px + 中文整數
                 const obvChart = createChart('obv-chart', {{
-                    ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 7. BIAS: 整數
+                // ★7. BIAS: 13px + 整數
                 const biasChart = createChart('bias-chart', {{
-                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
 
@@ -558,6 +560,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
+                    // ★強制鎖定 115px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
