@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：VOL/OBV 9px, 其他 11px)
+    # 5. JavaScript (★ 核心改動：統一字體 11px，但數值格式化縮短)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -290,6 +290,7 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
+            /* Legend 字體 11px (正常大小，不縮水，跟上方一致) */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
@@ -339,32 +340,23 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心：強制統一寬度 115px (保證對齊)
+                // ★核心：強制統一寬度 115px (保證垂直對齊)
                 const FORCE_WIDTH = 115;
 
-                // 一般圖表設定 (字體 11px)
-                const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // ★微縮圖表設定 (字體 9px - 針對VOL/OBV右側數值)
-                const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
-
-                const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
-                const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
-
-                // Helper to create options
-                function getOpts(layout, scaleMargins) {{
-                    return {{
-                        layout: layout,
-                        grid: grid,
-                        rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', 
-                            visible: true,
-                            minimumWidth: FORCE_WIDTH, // ★所有圖表寬度鎖死
-                            scaleMargins: scaleMargins
-                        }},
-                        timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        crosshair: crosshair,
-                    }};
-                }}
+                // ★核心：統一字體 11px (讓日期跟上方一致)
+                // 雖然字體沒變小，但因為我們用了"億"單位，字串很短，115px 絕對放得下！
+                const commonOptions = {{
+                    layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }},
+                    grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', 
+                        visible: true,
+                        minimumWidth: FORCE_WIDTH,
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }}
+                    }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+                }};
 
                 function createChart(id, opts) {{
                     const el = document.getElementById(id);
@@ -382,32 +374,27 @@ with col_main:
                     return num.toFixed(0) + unit;
                 }}
 
-                // 1. Main: 正常字體
-                const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                // 所有圖表統一使用 commonOptions (11px, 115px)
+                const mainChart = createChart('main-chart', commonOptions);
                 
-                // 2. VOL: ★極小字體 (9px)
+                // VOL Chart: 數值格式化縮短，字體維持 11px
                 const volChart = createChart('vol-chart', {{
-                    ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
+                    ...commonOptions, 
+                    rightPriceScale: {{ ...commonOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
                 
-                // 3. MACD: 正常
-                const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                const macdChart = createChart('macd-chart', commonOptions);
+                const kdjChart = createChart('kdj-chart', commonOptions);
+                const rsiChart = createChart('rsi-chart', commonOptions);
                 
-                // 4. KDJ: 正常
-                const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 5. RSI: 正常
-                const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 6. OBV: ★極小字體 (9px)
+                // OBV Chart: 數值格式化縮短，字體維持 11px
                 const obvChart = createChart('obv-chart', {{
-                    ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...commonOptions,
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
                 
-                // 7. BIAS: 正常
-                const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                const biasChart = createChart('bias-chart', commonOptions);
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 let rsi6Series, rsi12Series, rsi24Series;
@@ -521,9 +508,8 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 115px (VOL/OBV 字小所以塞得下，其他圖表字大但也塞得下)
+                    // ★強制鎖定 115px (VOL/OBV 字串夠短，所以115夠用)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
-                    
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                         if (range) allCharts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
