@@ -41,7 +41,7 @@ st.markdown("""
 # 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="5y", interval="1d"): # 預設改為 5y，避免 OBV 累加數值過大
+def get_data(ticker, period="2y", interval="1d"): # 預設改為 2y，讓 OBV 數值不要累積太大
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -64,11 +64,11 @@ def get_data(ticker, period="5y", interval="1d"): # 預設改為 5y，避免 OBV
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★★★ 核心修正：台股成交量強制轉「張」 (除以1000) ★★★
+        # ★★★ 關鍵：台股成交量轉「張」 (除以1000) ★★★
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 指標計算
+        # 指標
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -135,12 +135,11 @@ with st.sidebar:
     market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
     raw_symbol = st.text_input("代碼", value="2330")
     
-    # ★修復 NameError：在此處先定義好 ticker 和 is_tw_stock
     if market_mode == "台股(市)": ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
     
-    # 這裡定義好變數，確保後面 JS 絕對讀得到
+    # ★修復 NameError: 這裡先定義好，確保後面 JS 絕對讀得到
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 col_main, col_tools = st.columns([0.85, 0.15])
@@ -165,8 +164,8 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # 這裡改用 "5y" 而不是 "max"，避免 OBV 累加值過大
-    full_df = get_data(ticker, period="5y", interval=interval_map[interval_label])
+    # 預設抓 2y (兩年)，這樣 OBV 不會累積到太誇張
+    full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
@@ -351,7 +350,7 @@ with col_main:
                 const obvData = {obv_json};
                 const biasData = {bias_json};
                 
-                // 這裡絕對安全，因為 Python 端已經先定義了
+                // ★修復 NameError: isTW 現在絕對安全
                 const isTW = {str(is_tw_stock).lower()};
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
@@ -360,7 +359,7 @@ with col_main:
 
                 // 一般字體 11px
                 const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 微縮字體 9px (VOL/OBV)
+                // ★微縮字體 9px (VOL/OBV)
                 const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -373,7 +372,7 @@ with col_main:
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', 
                             visible: true,
-                            minimumWidth: FORCE_WIDTH, 
+                            minimumWidth: FORCE_WIDTH,
                             scaleMargins: scaleMargins
                         }},
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
@@ -387,7 +386,7 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 中文單位萬/億
+                // 中文單位 (萬/億)
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
