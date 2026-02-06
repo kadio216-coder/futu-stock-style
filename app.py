@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：Main Chart priceFormatter = 2)
+    # 5. JavaScript (★ 核心：智慧去零 formatter)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -361,7 +361,7 @@ with col_main:
                 // 1. 主圖: 字體 15px (放大)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 15 }};
                 
-                // 2. 副圖: 透明, 字體維持 14/11.5
+                // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -389,9 +389,14 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                function formatStandard(val, decimals=2) {{
+                // ★ Smart Formatter Logic:
+                // 1. 先格式化為 2 位小數 (1780.00, 1780.50)
+                // 2. 如果尾數是 .00 -> 刪掉 (變成 1780) -> 座標軸變整數，乾淨
+                // 3. 如果尾數是 .50 -> 保留 (變成 1780.50) -> 標籤保留精度
+                function formatSmart2(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
+                    let s = val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                    return s.endsWith('.00') ? s.slice(0, -3) : s;
                 }}
 
                 function formatSmart(val) {{
@@ -411,6 +416,11 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
+                function formatFixed2(val) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toFixed(2);
+                }}
+                
                 function formatFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toFixed(3);
@@ -424,10 +434,10 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★ 1. Main Chart: 使用 2 小數位 (標準顯示)
+                // ★ 1. Main Chart: 使用 formatSmart2 (整數去零，非整數保留)
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p, 2) }} 
+                    localization: {{ priceFormatter: (p) => formatSmart2(p) }} 
                 }});
                 
                 // 2. VOL Chart
@@ -553,8 +563,10 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
+                    // ★ Legend 保持強制 2 位小數 (formatFixed2) 或 3位 (formatFixed3)
+                    // 您之前要求 Main Chart Legend 為 2位小數 (對齊紅底白字)，其他指標3位
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
