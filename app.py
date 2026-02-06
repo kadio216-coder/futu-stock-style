@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # ---------------------------------------------------------
 # 1. 頁面設定
 # ---------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Final)")
+st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Compact)")
 
 st.markdown("""
 <style>
@@ -29,8 +29,8 @@ st.markdown("""
         border-radius: 20px;
         border: none;
         font-weight: 600;
-        font-size: 14px;
-        padding: 0.25rem 0.5rem;
+        font-size: 13px; /* 按鈕字體也微調小一點 */
+        padding: 0.2rem 0.5rem;
     }
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：字體縮小 + 寬度一致)
+    # 5. JavaScript (★ 核心改動：字體 10px / 寬度 100px)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,10 +289,12 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
+            
+            /* ★ Legend 字體 10px (極致緊湊) */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
-                font-size: 11px; 
-                line-height: 16px; 
+                font-size: 10px; 
+                line-height: 14px; 
                 font-weight: 500; pointer-events: none;
             }}
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
@@ -338,11 +340,15 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心：120px 寬度，配合小字體絕對夠用，且絕對對齊
-                const FORCE_WIDTH = 120;
+                // ★核心：強制寬度 100px (字變小了，100就夠了)
+                const FORCE_WIDTH = 100;
 
                 const commonOptions = {{
-                    layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }},
+                    layout: {{ 
+                        backgroundColor: '#FFFFFF', 
+                        textColor: '#333333',
+                        fontSize: 10, // ★全局座標軸字體 10px
+                    }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', 
@@ -379,14 +385,10 @@ with col_main:
                 const macdChart = createChart('macd-chart', commonOptions);
                 const kdjChart = createChart('kdj-chart', commonOptions);
                 const rsiChart = createChart('rsi-chart', commonOptions);
-                
-                // ★OBV Chart: 單獨設定小字體 10px，確保不撐開
                 const obvChart = createChart('obv-chart', {{
                     ...commonOptions,
-                    layout: {{ ...commonOptions.layout, fontSize: 10 }}, 
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
-                
                 const biasChart = createChart('bias-chart', commonOptions);
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -501,9 +503,8 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★核心：強制寫入寬度 120 (因為有智能縮寫，120足夠)
+                    // ★強制鎖定寬度 100px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
-                    
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                         if (range) allCharts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
