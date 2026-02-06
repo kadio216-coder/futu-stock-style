@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 介面控制 & 變數定義
+# 2. 介面控制 & 變數定義 (防止 NameError)
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🔍 股票搜尋")
@@ -49,13 +49,14 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
     
+    # 定義是否為台股，供後續使用
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
 # 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="6mo", interval="1d"):
+def get_data(ticker, period="6mo", interval="1d"): # 保持 6mo，讓 OBV 數值量級合理
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -78,7 +79,7 @@ def get_data(ticker, period="6mo", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★台股成交量轉「張」
+        # ★台股成交量轉「張」 (除以1000)
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
@@ -112,9 +113,9 @@ def get_data(ticker, period="6mo", interval="1d"):
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV & OBV MA10
+        # OBV (含 10日均線)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
-        data['OBV_MA10'] = ta.sma(data['OBV'], length=10) # ★新增均線
+        data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
@@ -278,14 +279,11 @@ with col_main:
         for _, row in df.iterrows():
             item = {'time': int(row['time'])}
             val = row.get('obv')
-            ma_val = row.get('obv_ma10') # 獲取 MA
-            
+            ma_val = row.get('obv_ma10')
             if pd.notnull(val): item['obv'] = float(val)
             else: item['obv'] = None
-            
             if pd.notnull(ma_val): item['obv_ma'] = float(ma_val)
             else: item['obv_ma'] = None
-            
             obv_data_list.append(item)
     obv_json = json.dumps(obv_data_list)
     
@@ -386,11 +384,12 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
+                // ★精簡小數點：改為 toFixed(1)
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(2) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(2) + '萬';
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(1) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(1) + '萬';
                     return val.toFixed(0);
                 }}
 
@@ -415,7 +414,7 @@ with col_main:
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 let rsi6Series, rsi12Series, rsi24Series;
                 let bias6Series, bias12Series, bias24Series;
-                let obvSeries, obvMaSeries; // ★宣告變數
+                let obvSeries, obvMaSeries;
                 
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
@@ -466,11 +465,9 @@ with col_main:
                     rsi24Series.setData(rsiData.map(d => ({{ time: d.time, value: d.rsi24 }})));
                 }}
                 
-                // ★ OBV + MA10 設定
                 if (obvChart && obvData.length > 0) {{ 
                     obvSeries = obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', lineWidth: 1 }});
-                    obvMaSeries = obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6', lineWidth: 1 }}); // 淺藍色均線
-                    
+                    obvMaSeries = obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6', lineWidth: 1 }});
                     obvSeries.setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
                     obvMaSeries.setData(obvData.map(d => ({{ time: d.time, value: d.obv_ma }}))); 
                 }}
@@ -515,7 +512,6 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI</span><span class="legend-value" style="color:#E6A23C">RSI1: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI3: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // ★ OBV Legend (顯示雙數值)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
