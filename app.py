@@ -206,7 +206,6 @@ with col_main:
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
-    # 判斷台股
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
     # ---------------------------------------------------------
@@ -280,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：JS 負責數值除法與格式化)
+    # 5. JavaScript (★ 核心：字體縮小 + 寬度一致)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -292,7 +291,7 @@ with col_main:
             .chart-container {{ position: relative; width: 100%; }}
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
-                font-size: 11px; /* 小字體 */
+                font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
@@ -335,11 +334,11 @@ with col_main:
                 const rsiData = {rsi_json};
                 const obvData = {obv_json};
                 const biasData = {bias_json};
-                const isTW = {str(is_tw_stock).lower()}; // Python 傳入是否台股
+                const isTW = {str(is_tw_stock).lower()};
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心邏輯：強制統一寬度 120px (因為數字變短了，120就夠)
+                // ★核心：120px 寬度，配合小字體絕對夠用，且絕對對齊
                 const FORCE_WIDTH = 120;
 
                 const commonOptions = {{
@@ -361,38 +360,30 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // --- 智能格式化函數 ---
                 function formatVol(val) {{
                     if (val === undefined || val === null) return '-';
-                    
-                    // 1. 如果是台股，先除以 1000 (股 -> 張)
                     let num = isTW ? (val / 1000) : val;
                     let unit = isTW ? '張' : '股';
-
-                    // 2. 縮寫邏輯 (億 / 萬)
                     let absVal = Math.abs(num);
                     if (absVal >= 100000000) return (num / 100000000).toFixed(2) + '億' + unit;
                     if (absVal >= 10000) return (num / 10000).toFixed(2) + '萬' + unit;
-                    
                     return num.toFixed(0) + unit;
                 }}
 
                 const mainChart = createChart('main-chart', commonOptions);
-                
-                // VOL Chart: 使用 formatVol
                 const volChart = createChart('vol-chart', {{
                     ...commonOptions, 
                     rightPriceScale: {{ ...commonOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
-                
                 const macdChart = createChart('macd-chart', commonOptions);
                 const kdjChart = createChart('kdj-chart', commonOptions);
                 const rsiChart = createChart('rsi-chart', commonOptions);
                 
-                // OBV Chart: 使用 formatVol
+                // ★OBV Chart: 單獨設定小字體 10px，確保不撐開
                 const obvChart = createChart('obv-chart', {{
                     ...commonOptions,
+                    layout: {{ ...commonOptions.layout, fontSize: 10 }}, 
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
                 
@@ -481,7 +472,6 @@ with col_main:
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">EMA</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
-                    // VOL Legend (使用 formatVol)
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
@@ -493,7 +483,6 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI</span><span class="legend-value" style="color:#E6A23C">RSI1: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI3: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // OBV Legend (使用 formatVol)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
@@ -512,8 +501,9 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定寬度 120px
+                    // ★核心：強制寫入寬度 120 (因為有智能縮寫，120足夠)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
+                    
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                         if (range) allCharts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
