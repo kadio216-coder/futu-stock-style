@@ -114,11 +114,10 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # 3. ★ 切割資料：保留最後半年 (約 130 個交易日)
-        # 這樣 OBV 累加基期會拉長到半年，數值會比一季大，但比兩年小
+        # 3. 切割資料：保留最後半年 (130天)
         data = data.tail(130).copy()
 
-        # 4. ★ 重算 OBV
+        # 4. 重算 OBV (基於這半年累加)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
@@ -164,7 +163,6 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ 取得半年份的資料
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -278,7 +276,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 回歸 V62 架構)
+    # 5. JavaScript (★ 核心：Main 15.5px + 格式強制分離)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -288,7 +286,7 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* V62: 副圖區塊背景 (CSS 漸層：左灰右白) */
+            /* V62.0 風格：左灰右白 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
@@ -357,10 +355,10 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 白色
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 1. 主圖: 字體 15.5px (放大)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 15.5 }};
                 
-                // 2. 副圖: 透明
+                // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -388,14 +386,20 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                function formatStandard(val) {{
+                // 一般格式化 (強制 2 位)
+                function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     return parseFloat(val.toFixed(3)).toString();
+                }}
+
+                function formatNumber(val, decimals=2) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
                 function formatBigSmart(val) {{
@@ -410,11 +414,6 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                function formatFixed3(val) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toFixed(3);
-                }}
-                
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -423,36 +422,61 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                const mainChart = createChart('main-chart', {{
-                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                // ★★★ 1. Main Chart 絕對分離設定 ★★★
+                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
+                    width: document.getElementById('main-chart').clientWidth,
+                    height: 450,
+                    layout: mainLayout,
+                    grid: grid,
+                    rightPriceScale: {{
+                        visible: true,
+                        borderColor: '#E0E0E0',
+                        minimumWidth: FORCE_WIDTH,
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
+                        tickMarkFormatter: (price) => {{
+                            return price.toFixed(0); // 軸：強制整數
+                        }}
+                    }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: crosshair,
+                    localization: {{
+                        priceFormatter: (price) => {{
+                            return price.toFixed(2); // 標籤：強制2位
+                        }}
+                    }}
                 }});
                 
+                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
+                // 3. MACD
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // 4. KDJ
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // 5. RSI
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // ★ 6. OBV Chart: 使用 formatNumber (正常數值，無單位)
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
+                    localization: {{ priceFormatter: (p) => formatNumber(p, 2) }}
                 }});
                 
+                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
@@ -545,8 +569,9 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
+                    // ★ Legend 保持強制 2 位小數 (Main) 或 3位 (其他)
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
@@ -555,15 +580,27 @@ with col_main:
                         }}
                     }}
                     
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ 
+                        const d = macdData.find(x => x.time === t); 
+                        if (d && d.dif!=null) {{
+                            macdLegendEl.innerHTML=`<div class="legend-row">
+                                <span class="legend-label">MACD(12,26,9)</span>
+                                <span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span>
+                            </div>`; 
+                        }} 
+                    }}
+
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
+                    // ★ OBV Legend: 使用 formatNumber (正常數值，無單位)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            const obvVal = formatBigFixed3(d.obv);
-                            const maVal = d.obv_ma ? formatBigFixed3(d.obv_ma) : '-';
+                            const obvVal = formatNumber(d.obv, 2);
+                            const maVal = d.obv_ma ? formatNumber(d.obv_ma, 2) : '-';
                             obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{obvVal}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{maVal}}</span></div>`;
                         }}
                     }}
@@ -609,7 +646,7 @@ with col_main:
     if show_obv: total_height += 120
     if show_bias: total_height += 120
     
-    # ★ 這裡加上 50px 的安全邊距，防止最後一個圖被切掉
+    # ★ 緩衝高度 (避免最後一圖被切)
     total_height += 50 
 
     components.html(html_code, height=total_height)
