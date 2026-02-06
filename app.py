@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：Main Chart Axis=整數 / Label=2小數)
+    # 5. JavaScript (★ 核心：FORMAT SEPARATION)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,7 +289,7 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* V62.0 風格：左灰右白 */
+            /* V62.0 風格：左灰右白 + 70px + 下方留白 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
@@ -389,12 +389,13 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般格式化 (強制 2 位)
-                function formatStandard(val, decimals=2) {{
+                // 一般格式化 (強制 2 位小數，給 Label 用)
+                function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
 
+                // 智慧去零 (給副圖用)
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     return parseFloat(val.toFixed(3)).toString();
@@ -412,10 +413,8 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                function formatFixed3(val) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toFixed(3);
-                }}
+                function formatFixed2(val) {{ return val.toFixed(2); }}
+                function formatFixed3(val) {{ return val.toFixed(3); }}
                 
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
@@ -425,13 +424,14 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★ 1. Main Chart: 全域設為 2位 (Label=1780.00)
+                // ★ 1. Main Chart 設定
+                // localization 設為 formatStandard(2) -> 這保證 Crosshair Label 顯示 .00
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p, 2) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // ★ 覆寫 Main Chart 座標軸：強制轉整數 (Axis=1780)
+                // ★ 覆寫 Main Chart 座標軸刻度 -> 強制整數 (toFixed(0))
                 mainChart.priceScale('right').applyOptions({{
                     tickMarkFormatter: (price) => {{
                         return price.toFixed(0); 
@@ -561,8 +561,7 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ★ Legend 保持強制 2 位小數 (formatFixed2) 或 3位 (formatFixed3)
-                    // 您之前要求 Main Chart Legend 為 2位小數 (對齊紅底白字)，其他指標3位
+                    // ★ Legend 保持強制 2 位小數 (Main) 或 3位 (其他)
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
