@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (關鍵修正：台股成交量 / 1000)
+# 2. 資料層 (★關鍵修正：台股成交量轉「張」)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -53,6 +53,8 @@ def get_data(ticker, period="2y", interval="1d"):
         data.index = data.index.tz_localize(None)
         
         data.columns = [c.capitalize() for c in data.columns]
+        
+        # 處理重採樣
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         elif is_quarterly:
@@ -63,12 +65,12 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★★★ 核心修正：如果是台股，成交量直接除以 1000 (股 -> 張) ★★★
-        # 這樣 OBV 算出來的數值就會是「張數」，不會是天文數字
+        # ★★★ 關鍵修正：如果是台股，成交量直接除以 1000 (股 -> 張) ★★★
+        # 這樣後續計算 OBV 就會是用「張」來算，數值會大幅縮小，符合台灣看盤習慣
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 指標計算
+        # --- 指標計算 (現在 Volume 已經是張數了) ---
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -98,7 +100,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV (現在是用「張」來累加，數值會正常)
+        # OBV 計算 (這時候是用張數算的，數值會正常很多)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
 
         # BIAS
@@ -135,7 +137,7 @@ def get_data(ticker, period="2y", interval="1d"):
 with st.sidebar:
     st.header("🔍 股票搜尋")
     market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
-    raw_symbol = st.text_input("代碼", value="2330")
+    raw_symbol = st.text_input("代碼", value="2330") # 預設改為台積電，方便你看效果
     if market_mode == "台股(市)": ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
@@ -296,14 +298,14 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* 一般 Legend */
+            /* Legend 字體 11px (全部統一) */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
-            /* VOL/OBV Legend (縮小) */
+            /* Legend 小字體 9px (給 VOL/OBV) */
             .legend-small {{
                 font-size: 9px; 
                 line-height: 14px;
@@ -348,14 +350,16 @@ with col_main:
                 const rsiData = {rsi_json};
                 const obvData = {obv_json};
                 const biasData = {bias_json};
+                const isTW = {str(is_tw_stock).lower()};
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
+                // ★核心：強制統一寬度 115px (數字正常了，絕對對齊)
                 const FORCE_WIDTH = 115;
 
-                // 一般字體 (11px)
+                // 一般圖表設定 (字體 11px)
                 const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 縮小字體 (9px) - 給 VOL/OBV
+                // ★微縮圖表設定 (字體 9px - 針對VOL/OBV)
                 const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -368,7 +372,7 @@ with col_main:
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', 
                             visible: true,
-                            minimumWidth: FORCE_WIDTH,
+                            minimumWidth: FORCE_WIDTH, // ★所有圖表寬度鎖死
                             scaleMargins: scaleMargins
                         }},
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
@@ -382,7 +386,7 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★智能中文單位 (Python已轉張數，這裡只負責顯式 億/萬)
+                // ★中文單位 (萬/億) 格式化
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -391,31 +395,24 @@ with col_main:
                     return val.toFixed(0);
                 }}
 
-                // 1. Main: 11px
                 const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // 2. VOL: 9px + 中文單位
+                // 2. VOL: ★極小字體 9px + 中文單位
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 3. MACD: 11px
                 const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 4. KDJ: 11px
                 const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 5. RSI: 11px
                 const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // 6. OBV: 9px + 中文單位
+                // 6. OBV: ★極小字體 9px + 中文單位
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 7. BIAS: 11px
                 const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
