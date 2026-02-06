@@ -38,10 +38,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層
+# 2. 介面控制 & 變數定義 (★移到最上方防止報錯)
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🔍 股票搜尋")
+    market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
+    raw_symbol = st.text_input("代碼", value="2330")
+    
+    if market_mode == "台股(市)": ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
+    elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
+    else: ticker = raw_symbol.upper()
+    
+    # ★修復 NameError: 變數定義在最前面，保證全域可用
+    is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
+
+# ---------------------------------------------------------
+# 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="2y", interval="1d"): # 預設改為 2y，讓 OBV 數值不要累積太大
+def get_data(ticker, period="6mo", interval="1d"): # ★預設改為 6mo (6個月)，讓 OBV 累加值變小，接近手機APP
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -68,7 +83,7 @@ def get_data(ticker, period="2y", interval="1d"): # 預設改為 2y，讓 OBV �
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 指標
+        # 指標計算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -127,21 +142,6 @@ def get_data(ticker, period="2y", interval="1d"): # 預設改為 2y，讓 OBV �
         print(f"Data Error: {e}")
         return None
 
-# ---------------------------------------------------------
-# 3. 介面控制
-# ---------------------------------------------------------
-with st.sidebar:
-    st.header("🔍 股票搜尋")
-    market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
-    raw_symbol = st.text_input("代碼", value="2330")
-    
-    if market_mode == "台股(市)": ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
-    elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
-    else: ticker = raw_symbol.upper()
-    
-    # ★修復 NameError: 這裡先定義好，確保後面 JS 絕對讀得到
-    is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
-
 col_main, col_tools = st.columns([0.85, 0.15])
 
 with col_tools:
@@ -164,8 +164,8 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # 預設抓 2y (兩年)，這樣 OBV 不會累積到太誇張
-    full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
+    # 預設 period="6mo"，讓 OBV 數值量級合理
+    full_df = get_data(ticker, period="6mo", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
@@ -175,7 +175,7 @@ with col_main:
     
     if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m'
     if 'slider_range' not in st.session_state:
-        default_start = max_d - timedelta(days=180)
+        default_start = max_d - timedelta(days=90) # Slider 預設顯示最近3個月
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
@@ -286,7 +286,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript
+    # 5. JavaScript (★ 核心改動：VOL/OBV 9px, 中文單位萬/億, 寬度115)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -297,14 +297,14 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* 一般字體 11px */
+            /* 一般 Legend */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
-            /* 小字體 9px (VOL/OBV) */
+            /* 小字體 Legend (VOL/OBV) */
             .legend-small {{
                 font-size: 9px; 
                 line-height: 14px;
@@ -349,9 +349,7 @@ with col_main:
                 const rsiData = {rsi_json};
                 const obvData = {obv_json};
                 const biasData = {bias_json};
-                
-                // ★修復 NameError: isTW 現在絕對安全
-                const isTW = {str(is_tw_stock).lower()};
+                const isTW = {str(is_tw_stock).lower()}; // ★修正 NameError
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
@@ -372,7 +370,7 @@ with col_main:
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', 
                             visible: true,
-                            minimumWidth: FORCE_WIDTH,
+                            minimumWidth: FORCE_WIDTH, 
                             scaleMargins: scaleMargins
                         }},
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
