@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：Main Chart Font 15px + 0小數)
+    # 5. JavaScript (★ 核心：Main Chart priceFormatter = 2)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -358,10 +358,10 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // ★ 1. 主圖: 字體 15px (放大)
+                // 1. 主圖: 字體 15px (放大)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 15 }};
                 
-                // 2. 副圖: 透明 (透出 CSS 漸層), 字體維持 14/11.5
+                // 2. 副圖: 透明, 字體維持 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -389,7 +389,6 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般格式化
                 function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
@@ -425,10 +424,10 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★ 1. Main Chart: 使用 0 小數位 (整數顯示)
+                // ★ 1. Main Chart: 使用 2 小數位 (標準顯示)
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 2) }} 
                 }});
                 
                 // 2. VOL Chart
