@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：CSS 硬切漸層背景)
+    # 5. JavaScript (★ 核心：CSS 精準區塊著色 + 70px 寬度)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,12 +289,17 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* ★ 重點：透過 linear-gradient 實現「左灰右白」的硬切效果 */
-            /* #FAFAFA (淺灰) 佔據 100% - 115px */
-            /* #FFFFFF (純白) 佔據剩下的 115px */
+            /* ★ 副圖精準背景 */
+            /* 1. background-color: #FFFFFF (底色為白，給右軸和下軸用) */
+            /* 2. linear-gradient: 灰色(#FAFAFA)只填滿 100% - 70px (圖表區)，右邊 70px 透明 */
+            /* 3. background-size: 高度只佔 100% - 30px (避開下方日期軸) */
             .sub-chart {{
-                background: linear-gradient(to right, #FAFAFA calc(100% - 115px), #FFFFFF calc(100% - 115px));
-                border-bottom: 1px solid #E0E0E0; /* 分隔線保持 */
+                background-color: #FFFFFF;
+                background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
+                background-size: 100% calc(100% - 30px);
+                background-repeat: no-repeat;
+                
+                border-bottom: 1px solid #E0E0E0;
                 margin-bottom: 10px;
             }}
             
@@ -355,12 +360,13 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                const FORCE_WIDTH = 115;
+                // ★ 強制寬度 70px (更緊湊，消除多餘白邊)
+                const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 保持全白
+                // 1. 主圖: 白色
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
-                // ★ 2. 副圖: 設為透明 (transparent)，以便讓底層 CSS 的灰白分色顯示出來
+                // 2. 副圖: 透明 (讓 CSS 灰白分區顯示)
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -590,7 +596,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 115px
+                    // ★強制鎖定 70px (精準對齊，無白邊)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
