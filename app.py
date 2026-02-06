@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (維持 2y)
+# 3. 資料層 (V62邏輯 + OBV一季修正)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -60,6 +60,7 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
+        # 1. 下載長資料 (確保 MACD 準確)
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
@@ -81,7 +82,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # --- 指標計算 ---
+        # 2. 先算長週期指標 (MACD, MA, KD...)
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
@@ -106,15 +107,20 @@ def get_data(ticker, period="2y", interval="1d"):
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        data['OBV'] = ta.obv(data[close_col], data['volume'])
-        data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
-
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
         data['BIAS6'] = (data[close_col] - sma6) / sma6 * 100
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
+
+        # 3. ★ 切割資料：只保留最後一季 (約 65 個交易日)
+        # 這樣做會讓前面的長歷史被切斷，但保留了上面算好的 MACD 值
+        data = data.tail(65).copy()
+
+        # 4. ★ 重算 OBV：現在它是基於這 65 天開始累加，數值會變小 (40萬等級)
+        data['OBV'] = ta.obv(data[close_col], data['volume'])
+        data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
@@ -158,6 +164,7 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
+    # ★ 這裡拿到的 full_df 已經只有 65 天了
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -166,24 +173,17 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m'
+    if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '3m' # 預設改為 3m
     if 'slider_range' not in st.session_state:
-        default_start = max_d - timedelta(days=180)
-        if default_start < min_d: default_start = min_d
-        st.session_state['slider_range'] = (default_start, max_d)
+        st.session_state['slider_range'] = (min_d, max_d)
 
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
         st.session_state['active_btn'] = btn_key
         end = max_d
-        if is_max: start = min_d
-        elif ytd:
-            start = datetime(end.year, 1, 1)
-            if start < min_d: start = min_d
-        else:
-            start = end - relativedelta(months=months, years=years)
-            if start < min_d: start = min_d
+        start = min_d # 因為資料已經被截斷為一季，其實 Slider 能拉的範圍很小
         st.session_state['slider_range'] = (start, end)
 
+    # 由於資料只有一季，這裡的按鈕功能其實受限，但為了介面完整保留
     btn_cols = st.columns(7)
     buttons = [
         {"label": "1月", "key": "1m", "m": 1, "y": 0, "ytd": False, "max": False},
@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：CSS 精準區塊著色 + 70px 寬度)
+    # 5. JavaScript (★ 回歸 V62 架構)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,16 +289,12 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* ★ 副圖精準背景 */
-            /* 1. background-color: #FFFFFF (底色為白，給右軸和下軸用) */
-            /* 2. linear-gradient: 灰色(#FAFAFA)只填滿 100% - 70px (圖表區)，右邊 70px 透明 */
-            /* 3. background-size: 高度只佔 100% - 30px (避開下方日期軸) */
+            /* V62: 副圖區塊背景 (CSS 漸層：左灰右白) */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
                 background-size: 100% calc(100% - 30px);
                 background-repeat: no-repeat;
-                
                 border-bottom: 1px solid #E0E0E0;
                 margin-bottom: 10px;
             }}
@@ -360,13 +356,12 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★ 強制寬度 70px (更緊湊，消除多餘白邊)
                 const FORCE_WIDTH = 70;
 
                 // 1. 主圖: 白色
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
-                // 2. 副圖: 透明 (讓 CSS 灰白分區顯示)
+                // 2. 副圖: 透明
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -596,7 +591,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 70px (精準對齊，無白邊)
+                    // ★強制鎖定 115px (V62 設定)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
