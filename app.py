@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (演算法全面校正)
+# 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="6mo", interval="1d"):
@@ -75,41 +75,30 @@ def get_data(ticker, period="6mo", interval="1d"):
 
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         data.columns = [str(col).lower() for col in data.columns]
-        
-        # 為了跟看盤軟體一致，我們優先使用 'Close' 而非 'Adj Close'
-        # 很多技術指標在看盤軟體上都是用未還原的價格計算的
-        close_col = 'close' 
+        close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★ 單位修正：台股成交量 / 1000
+        # 台股成交量轉「張」
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # --- 1. MA (移動平均) ---
-        # 看盤軟體通常用 SMA (簡單移動平均)
-        data['MA5'] = ta.sma(data[close_col], length=5)
-        data['MA10'] = ta.sma(data[close_col], length=10)
-        data['MA20'] = ta.sma(data[close_col], length=20)
-        data['MA60'] = ta.sma(data[close_col], length=60)
+        # 指標計算
+        data['MA5'] = ta.ema(data[close_col], length=5)
+        data['MA10'] = ta.ema(data[close_col], length=10)
+        data['MA20'] = ta.ema(data[close_col], length=20)
+        data['MA60'] = ta.ema(data[close_col], length=60)
         
-        # --- 2. BOLL (布林通道) ---
-        # 標準算法：中軌 = MA20, 上下軌 = 中軌 +/- 2 * StdDev(Close)
-        # 修正：之前用了 Typical Price，現在改回 Close，跟軟體對齊
+        # BOLL (Close)
         data['boll_mid'] = data[close_col].rolling(window=20).mean()
         data['boll_std'] = data[close_col].rolling(window=20).std()
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
         
-        # --- 3. MACD ---
-        # 標準參數 (12, 26, 9)，通常使用 EMA
+        # MACD
         macd = ta.macd(data[close_col], fast=12, slow=26, signal=9)
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # --- 4. KDJ (全手動重寫) ---
-        # 台灣/富途標準：RSV = (C - L9)/(H9 - L9) * 100
-        # K = 2/3 * K_prev + 1/3 * RSV
-        # D = 2/3 * D_prev + 1/3 * K
-        # J = 3K - 2D
+        # KDJ
         low_list = data['low'].rolling(9, min_periods=1).min()
         high_list = data['high'].rolling(9, min_periods=1).max()
         rsv = (data[close_col] - low_list) / (high_list - low_list) * 100
@@ -117,22 +106,16 @@ def get_data(ticker, period="6mo", interval="1d"):
         data['d'] = data['k'].ewm(alpha=1/3, adjust=False).mean()
         data['j'] = 3 * data['k'] - 2 * data['d']
 
-        # --- 5. RSI (相對強弱指標) ---
-        # 修正：很多看盤軟體 (如三竹) 預設是用 SMA 算法計算 RSI，而非 Wilder's Smoothing
-        # 這裡嘗試使用 pandas-ta 的 rsi，如果差異大，可轉為 ta.rsi(..., scalar=100, talib=False) 
-        # 為了通用性，我們使用 ta.rsi (預設是 Wilder's)，這也是國際標準。
-        # 如果要完全對齊三竹，可能需要用 SMA 變體，但這裡先用標準版。
+        # RSI
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # --- 6. OBV ---
+        # OBV & MA
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
-        # --- 7. BIAS (乖離率) ---
-        # BIAS = (Close - MA) / MA * 100
-        # 這裡的 MA 必須是 SMA
+        # BIAS
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -303,7 +286,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript
+    # 5. JavaScript (★ 核心：全部恢復 2 位小數)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -370,11 +353,11 @@ with col_main:
 
                 const FORCE_WIDTH = 115;
 
-                // 1. 主圖: 11px
+                // 1. 主圖字體 (11px)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 2. 指標: 14px (MACD, KDJ, RSI, BIAS)
+                // 2. 指標字體 (14px)
                 const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14 }};
-                // 3. VOL/OBV: 11px (改回 11px)
+                // 3. VOL/OBV字體 (11px)
                 const volObvLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -401,17 +384,19 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
+                // ★ 一般數值：恢復 2 位小數
                 function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 0, maximumFractionDigits: 0 }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
 
+                // ★ 大數值：恢復 2 位小數
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬';
-                    return val.toFixed(0);
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(2) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(2) + '萬';
+                    return val.toFixed(2);
                 }}
 
                 const mainChart = createChart('main-chart', {{
@@ -473,10 +458,10 @@ with col_main:
 
                     if (maData.length > 0) {{
                         const f = maData[0];
-                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA(20)' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
                 
@@ -536,11 +521,9 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // Legend: MA 參數顯示
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(0)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(0)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(0)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(0)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    
-                    // Legend: BOLL 參數顯示
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(0)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(0):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(0):'-'}}</span></div>`; }}
+                    // ★ Legend 恢復 2 位小數 toFixed(2)
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
@@ -549,16 +532,10 @@ with col_main:
                         }}
                     }}
                     
-                    // Legend: MACD 參數 (12,26,9)
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(0)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(0)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(0)}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(2)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(2)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(2)}}</span></div>`; }}
+                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(2)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(2)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(2)}}</span></div>`; }}
+                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(2):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(2):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(2):'-'}}</span></div>`; }}
                     
-                    // Legend: KDJ (9,3,3)
-                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(0)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(0)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(0)}}</span></div>`; }}
-                    
-                    // Legend: RSI
-                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(0):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(0):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(0):'-'}}</span></div>`; }}
-                    
-                    // Legend: OBV
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
@@ -568,11 +545,10 @@ with col_main:
                         }}
                     }}
                     
-                    // Legend: BIAS
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS6: ${{d.b6!=null?d.b6.toFixed(0):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS12: ${{d.b12!=null?d.b12.toFixed(0):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS24: ${{d.b24!=null?d.b24.toFixed(0):'-'}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{d.b6!=null?d.b6.toFixed(2):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(2):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(2):'-'}}</span></div>`;
                         }}
                     }}
                 }}
