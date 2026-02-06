@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (V78: MACD長線 + OBV半年)
+# 3. 資料層 (MACD長線 + OBV半年)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -60,7 +60,7 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
-        # 1. 下載 2年 資料
+        # 1. 下載 2年 資料 (確保 MACD 準確)
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
@@ -82,7 +82,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 2. 計算長週期指標
+        # 2. 先算長週期指標 (MACD, MA, KD...)
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
@@ -114,10 +114,11 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # 3. ★ V78設定：保留最後半年 (130天)
+        # 3. ★ 切割資料：保留最後半年 (130天)
+        # 目的：讓 OBV 從這半年開始累加，解決數值過大問題
         data = data.tail(130).copy()
 
-        # 4. ★ V78設定：重算 OBV
+        # 4. ★ 重算 OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
@@ -163,7 +164,7 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ V78: 資料只有 130 天
+    # ★ 這裡取得的 df 已經只剩半年 (130天)，OBV 數值正常
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -179,7 +180,7 @@ with col_main:
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
         st.session_state['active_btn'] = btn_key
         end = max_d
-        start = min_d 
+        start = min_d # 因為資料本身就只有半年，這裡起點就是 min_d
         st.session_state['slider_range'] = (start, end)
 
     btn_cols = st.columns(7)
@@ -277,7 +278,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V78架構 + 繪圖順序調換)
+    # 5. JavaScript (★ 核心：V62架構)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -356,7 +357,7 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 字體 11px (V78/V62原設)
+                // 1. 主圖: 字體 11px (V62)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
@@ -422,31 +423,11 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★ V78: 強制分離 - Axis整數 / Label 2位小數
-                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
-                    width: document.getElementById('main-chart').clientWidth,
-                    height: 450,
-                    layout: mainLayout,
-                    grid: grid,
-                    rightPriceScale: {{
-                        visible: true,
-                        borderColor: '#E0E0E0',
-                        minimumWidth: FORCE_WIDTH,
-                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (price) => {{
-                            return price.toFixed(0); 
-                        }}
-                    }},
-                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    crosshair: crosshair,
-                    localization: {{
-                        priceFormatter: (price) => {{
-                            return price.toFixed(2);
-                        }}
-                    }}
+                const mainChart = createChart('main-chart', {{
+                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
@@ -467,10 +448,10 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ OBV Chart: formatBigFixed3 (萬/億) (V78)
+                // ★ OBV Chart: 維持 formatBigSmart (有萬單位)
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }}
+                    localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
                 const biasChart = createChart('bias-chart', {{
@@ -491,23 +472,21 @@ with col_main:
                     }});
                     candleSeries.setData(candlesData);
 
-                    // ★ 修正順序1：先畫 MA，讓它在底層
+                    if (bollData.length > 0) {{
+                        bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FF4081', title: 'MID' }}); 
+                        bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
+                        bollLowSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOWER' }});
+                        bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
+                        bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
+                        bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
+                    }}
+
                     if (maData.length > 0) {{
                         const f = maData[0];
                         if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
                         if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
                         if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA(20)' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
                         if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
-                    }}
-
-                    // ★ 修正順序2：後畫 BOLL，確保 MID 線在最上層
-                    if (bollData.length > 0) {{
-                        bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID' }}); 
-                        bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
-                        bollLowSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOWER' }});
-                        bollMidSeries.setData(bollData.map(d => ({{ time: d.time, value: d.mid }})));
-                        bollUpSeries.setData(bollData.map(d => ({{ time: d.time, value: d.up }})));
-                        bollLowSeries.setData(bollData.map(d => ({{ time: d.time, value: d.low }})));
                     }}
                 }}
                 
@@ -567,8 +546,8 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
@@ -577,10 +556,22 @@ with col_main:
                         }}
                     }}
                     
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ 
+                        const d = macdData.find(x => x.time === t); 
+                        if (d && d.dif!=null) {{
+                            macdLegendEl.innerHTML=`<div class="legend-row">
+                                <span class="legend-label">MACD(12,26,9)</span>
+                                <span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span>
+                            </div>`; 
+                        }} 
+                    }}
+
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
+                    // ★ OBV Legend: formatBigFixed3 (萬/億) - V62 style
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
@@ -601,7 +592,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 70px (V78/V62)
+                    // ★強制鎖定 70px (V62)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
@@ -631,7 +622,7 @@ with col_main:
     if show_obv: total_height += 120
     if show_bias: total_height += 120
     
-    # ★ 緩衝高度 +50px (V78)
-    total_height += 50
+    # ★ 緩衝高度 (避免最後一圖被切)
+    total_height += 50 
 
     components.html(html_code, height=total_height)
