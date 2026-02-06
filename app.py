@@ -63,7 +63,7 @@ def get_data(ticker, period="2y", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 指標運算
+        # 指標
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -206,7 +206,7 @@ with col_main:
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
-    # ★判斷是否為台股 (用來決定成交量單位)
+    # 判斷台股
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
     # ---------------------------------------------------------
@@ -280,7 +280,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：台股/美股單位切換 + 強制寬度 140px)
+    # 5. JavaScript (★ 核心改動：JS 負責數值除法與格式化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -292,7 +292,7 @@ with col_main:
             .chart-container {{ position: relative; width: 100%; }}
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
-                font-size: 11px; 
+                font-size: 11px; /* 小字體 */
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
@@ -335,20 +335,19 @@ with col_main:
                 const rsiData = {rsi_json};
                 const obvData = {obv_json};
                 const biasData = {bias_json};
-                
-                // ★關鍵變數：是否為台股
-                const isTW = {str(is_tw_stock).lower()};
+                const isTW = {str(is_tw_stock).lower()}; // Python 傳入是否台股
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心邏輯：強制寬度 140px (台股數字變短了，不用那麼寬)
-                const FORCE_WIDTH = 140;
+                // ★核心邏輯：強制統一寬度 120px (因為數字變短了，120就夠)
+                const FORCE_WIDTH = 120;
 
                 const commonOptions = {{
                     layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }},
                     grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
                     rightPriceScale: {{ 
-                        borderColor: '#E0E0E0', visible: true,
+                        borderColor: '#E0E0E0', 
+                        visible: true,
                         minimumWidth: FORCE_WIDTH,
                         scaleMargins: {{ top: 0.1, bottom: 0.1 }}
                     }},
@@ -362,15 +361,15 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // --- 輔助函數：格式化成交量數值 ---
+                // --- 智能格式化函數 ---
                 function formatVol(val) {{
-                    if (!val) return '-';
-                    // 如果是台股，原始數據(股) -> 張 (除以1000)
+                    if (val === undefined || val === null) return '-';
+                    
+                    // 1. 如果是台股，先除以 1000 (股 -> 張)
                     let num = isTW ? (val / 1000) : val;
                     let unit = isTW ? '張' : '股';
-                    
-                    // 如果數字超大 (例如 OBV)，用萬/億來縮寫
-                    // 美股通常用 K/M/B，這裡配合你的習慣用中文
+
+                    // 2. 縮寫邏輯 (億 / 萬)
                     let absVal = Math.abs(num);
                     if (absVal >= 100000000) return (num / 100000000).toFixed(2) + '億' + unit;
                     if (absVal >= 10000) return (num / 10000).toFixed(2) + '萬' + unit;
@@ -380,7 +379,7 @@ with col_main:
 
                 const mainChart = createChart('main-chart', commonOptions);
                 
-                // VOL Chart
+                // VOL Chart: 使用 formatVol
                 const volChart = createChart('vol-chart', {{
                     ...commonOptions, 
                     rightPriceScale: {{ ...commonOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
@@ -391,7 +390,7 @@ with col_main:
                 const kdjChart = createChart('kdj-chart', commonOptions);
                 const rsiChart = createChart('rsi-chart', commonOptions);
                 
-                // OBV Chart (使用相同的格式化邏輯)
+                // OBV Chart: 使用 formatVol
                 const obvChart = createChart('obv-chart', {{
                     ...commonOptions,
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
@@ -404,7 +403,6 @@ with col_main:
                 let bias6Series, bias12Series, bias24Series;
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
-                // ... (主圖邏輯同前) ...
                 if (mainChart) {{
                     const candleSeries = mainChart.addCandlestickSeries({{
                         upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
@@ -480,7 +478,6 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ... Legends ...
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">EMA</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
@@ -513,8 +510,9 @@ with col_main:
                 }}
 
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
+                
                 allCharts.forEach(c => {{
-                    // ★強制鎖定寬度
+                    // ★強制鎖定寬度 120px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
