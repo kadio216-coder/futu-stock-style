@@ -78,27 +78,22 @@ def get_data(ticker, period="6mo", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 台股成交量轉「張」
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 指標計算
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
         data['MA60'] = ta.sma(data[close_col], length=60)
         
-        # BOLL
         data['boll_mid'] = data[close_col].rolling(window=20).mean()
         data['boll_std'] = data[close_col].rolling(window=20).std()
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
         
-        # MACD
         macd = ta.macd(data[close_col], fast=12, slow=26, signal=9)
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # KDJ
         low_list = data['low'].rolling(9, min_periods=1).min()
         high_list = data['high'].rolling(9, min_periods=1).max()
         rsv = (data[close_col] - low_list) / (high_list - low_list) * 100
@@ -106,16 +101,13 @@ def get_data(ticker, period="6mo", interval="1d"):
         data['d'] = data['k'].ewm(alpha=1/3, adjust=False).mean()
         data['j'] = 3 * data['k'] - 2 * data['d']
 
-        # RSI
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
-        # BIAS
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -286,7 +278,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：全部改為 3 位小數)
+    # 5. JavaScript (★ 核心：分流精度設定)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -384,56 +376,61 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★ 一般數值：3 位小數
-                function formatStandard(val) {{
+                // ★一般格式化：支援自訂小數點
+                function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 3, maximumFractionDigits: 3 }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
-                // ★ 大數值 (VOL/OBV)：中文 + 3 位小數
-                function formatBigNumber(val) {{
+                // ★大數值格式化：支援自訂小數點 (含中文)
+                function formatBigNumber(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(3) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(3) + '萬';
-                    return val.toFixed(3);
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(decimals) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(decimals) + '萬';
+                    return val.toFixed(decimals);
                 }}
 
+                // 1. Main Chart: Scale=0 (整數), Legend=3 (高精度)
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }} 
                 }});
                 
-                // VOL: 11px + 中文(3位小數)
+                // 2. VOL Chart: Scale=0 (整數+中文), Legend=3 (高精度+中文)
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
-                    localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
+                    localization: {{ priceFormatter: (p) => formatBigNumber(p, 0) }}
                 }});
                 
+                // 3. MACD: Scale=0, Legend=3
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }}
                 }});
                 
+                // 4. KDJ: Scale=0, Legend=3
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }}
                 }});
                 
+                // 5. RSI: Scale=0, Legend=3
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }}
                 }});
                 
-                // OBV: 11px + 中文(3位小數)
+                // 6. OBV: Scale=0, Legend=3
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
+                    localization: {{ priceFormatter: (p) => formatBigNumber(p, 0) }}
                 }});
                 
+                // 7. BIAS: Scale=0, Legend=3
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }}
                 }});
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -523,26 +520,27 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ★ Legend 全部改為 3 位小數 toFixed(3)
+                    // ★ Legend 全面改為 3 位小數 (toFixed(3))
+                    
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
-                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatBigNumber(d.value)}}</span></div>`;
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatBigNumber(d.value, 3)}}</span></div>`;
                         }}
                     }}
                     
                     if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
-                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
+                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            const obvVal = formatBigNumber(d.obv);
-                            const maVal = d.obv_ma ? formatBigNumber(d.obv_ma) : '-';
+                            const obvVal = formatBigNumber(d.obv, 3);
+                            const maVal = d.obv_ma ? formatBigNumber(d.obv_ma, 3) : '-';
                             obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{obvVal}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{maVal}}</span></div>`;
                         }}
                     }}
