@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：FORMAT SEPARATION 終極版)
+    # 5. JavaScript (★ 核心：強制分離)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,7 +289,7 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* V62.0 風格：左灰右白 */
+            /* V62.0 風格 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
@@ -368,9 +368,8 @@ with col_main:
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
 
-                // ★ 改良版 getOpts: 接收 axisFormatter 作為第三個參數
-                function getOpts(layout, scaleMargins, axisFormatter) {{
-                    const opts = {{
+                function getOpts(layout, scaleMargins) {{
+                    return {{
                         layout: layout,
                         grid: grid,
                         rightPriceScale: {{ 
@@ -382,12 +381,6 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         crosshair: crosshair,
                     }};
-                    
-                    // 如果有傳入特定座標軸格式，直接寫入設定
-                    if (axisFormatter) {{
-                        opts.rightPriceScale.tickMarkFormatter = axisFormatter;
-                    }}
-                    return opts;
                 }}
 
                 function createChart(id, opts) {{
@@ -396,10 +389,9 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般格式化 (Label 用)
-                function formatStandard(val, decimals=2) {{
+                function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
 
                 function formatSmart(val) {{
@@ -419,11 +411,6 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                function formatFixed3(val) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toFixed(3);
-                }}
-                
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -432,15 +419,31 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★★★ 1. Main Chart 終極設定 ★★★
-                // Axis Formatter: (p) => p.toFixed(0)  -> 強制整數 (座標軸)
-                // Label Formatter: formatStandard(p, 2) -> 強制2位小數 (紅底標籤)
-                
-                const mainOpts = getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}, (p) => p.toFixed(0)); // 這裡傳入 Axis 格式器
-                
-                const mainChart = createChart('main-chart', {{
-                    ...mainOpts,
-                    localization: {{ priceFormatter: (p) => formatStandard(p, 2) }} // 這裡傳入 Label 格式器
+                // ★★★ 1. Main Chart 絕對分離設定 ★★★
+                // 我們不再共用 getOpts，直接在這裡把設定寫死，確保不被干擾
+                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
+                    width: document.getElementById('main-chart').clientWidth,
+                    height: 450,
+                    layout: mainLayout,
+                    grid: grid,
+                    // ★ 這裡控制座標軸 (Axis Ticks) -> 強制整數
+                    rightPriceScale: {{
+                        visible: true,
+                        borderColor: '#E0E0E0',
+                        minimumWidth: FORCE_WIDTH,
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
+                        tickMarkFormatter: (price) => {{
+                            return price.toFixed(0); 
+                        }}
+                    }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: crosshair,
+                    // ★ 這裡控制標籤 (Labels) -> 強制2位小數
+                    localization: {{
+                        priceFormatter: (price) => {{
+                            return price.toFixed(2);
+                        }}
+                    }}
                 }});
                 
                 // 2. VOL Chart
@@ -503,10 +506,10 @@ with col_main:
 
                     if (maData.length > 0) {{
                         const f = maData[0];
-                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA(20)' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
                 
@@ -566,7 +569,7 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // Legend: Main 2位小數, 其他 3位
+                    // ★ Legend 保持強制 2 位小數 (formatFixed2) 或 3位 (formatFixed3)
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
