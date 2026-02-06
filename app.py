@@ -285,7 +285,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：字體 11px/14px/9px 分層)
+    # 5. JavaScript
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -302,9 +302,10 @@ with col_main:
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
+            /* ★VOL/OBV Legend 改為 11px (跟主圖一致) */
             .legend-small {{
-                font-size: 9px; 
-                line-height: 14px;
+                font-size: 11px; 
+                line-height: 16px;
             }}
             
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
@@ -354,10 +355,10 @@ with col_main:
 
                 // 1. 主圖字體 (11px)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // ★2. 一般指標字體 (14px) - MACD, KDJ, RSI, BIAS
+                // 2. 一般指標字體 (14px) - MACD, KDJ, RSI, BIAS
                 const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14 }};
-                // 3. 微縮字體 (9px) - VOL, OBV (為了容納單位)
-                const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
+                // ★3. VOL/OBV字體 (11px) - 讓日期跟主圖一致，數值也不會太小
+                const volObvLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
@@ -383,13 +384,11 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般整數格式化
                 function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: 0, maximumFractionDigits: 0 }});
                 }}
 
-                // 中文單位 + 整數 (VOL/OBV)
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -404,37 +403,37 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // 2. VOL: 9px (Tiny)
+                // ★2. VOL: 11px (volObvLayout)
                 const volChart = createChart('vol-chart', {{
-                    ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
+                    ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 3. MACD: 14px (Indicator)
+                // 3. MACD: 14px (indicatorLayout)
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 4. KDJ: 14px (Indicator)
+                // 4. KDJ: 14px
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 5. RSI: 14px (Indicator)
+                // 5. RSI: 14px
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 6. OBV: 9px (Tiny)
+                // ★6. OBV: 11px (volObvLayout)
                 const obvChart = createChart('obv-chart', {{
-                    ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 7. BIAS: 14px (Indicator)
+                // 7. BIAS: 14px
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
@@ -527,7 +526,6 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ★ Legend 數值也改為整數 toFixed(0)
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">EMA</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(0)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(0)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(0)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(0)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(0)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(0):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(0):'-'}}</span></div>`; }}
                     
