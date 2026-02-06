@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (維持 2y)
+# 3. 資料層 (維持 2y - V62原版設定)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -363,7 +363,7 @@ with col_main:
                 // ★ 強制寬度 70px (更緊湊，消除多餘白邊)
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 白色
+                // 1. 主圖: 白色 (V62)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
                 // 2. 副圖: 透明 (讓 CSS 灰白分區顯示)
@@ -625,5 +625,8 @@ with col_main:
     if show_rsi: total_height += 120
     if show_obv: total_height += 120
     if show_bias: total_height += 120
+    
+    # ★ 緩衝高度 (避免最後一圖被切)
+    total_height += 50 
 
     components.html(html_code, height=total_height)
