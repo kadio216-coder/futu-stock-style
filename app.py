@@ -35,7 +35,7 @@ st.markdown("""
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
     
-    /* 策略儀表板樣式 (4格 + 字體放大 V89) */
+    /* 策略儀表板樣式 */
     .strategy-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr); 
@@ -78,7 +78,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (V78架構 + MA120)
+# 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -167,7 +167,7 @@ def get_data(ticker, period="2y", interval="1d"):
         print(f"Data Error: {e}")
         return None
 
-# --- ★ 四大策略偵測邏輯 (V89) ---
+# --- ★ 四大策略偵測邏輯 ---
 def check_4_strategies(df):
     if len(df) < 30: return {}
     
@@ -396,7 +396,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V78架構 + MA先畫 + 寬度60px)
+    # 5. JavaScript (★ 核心：V90架構 + VOL Axis 整數)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -517,16 +517,16 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ V78: OBV Axis 是整數 + 萬
-                function formatOBVAxis(val) {{
+                // ★ V91 Fix: 專給 Axis 用的整數格式 (去掉 .000)
+                function formatIntegerAxis(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬';
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億'; // 整數
+                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬'; // 整數
                     return val.toFixed(0);
                 }}
 
-                // ★ V78: VOL/OBV Legend 是 3位小數 + 萬
+                // ★ V78: VOL/OBV Legend 維持 3位小數 + 萬
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -542,12 +542,18 @@ with col_main:
                 }});
                 
                 const volChart = createChart('vol-chart', {{
-                    ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
-                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }} // Legend用
-                }});
-                // 覆蓋 VOL Axis 格式為 整數
-                volChart.priceScale('right').applyOptions({{
-                    scaleMargins: {{top: 0.2, bottom: 0}},
+                    layout: volObvLayout, 
+                    grid: grid, 
+                    crosshair: crosshair,
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    // ★ V91 Fix: Axis 強制用 formatIntegerAxis (整數)
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, 
+                        scaleMargins: {{top: 0.2, bottom: 0}},
+                        tickMarkFormatter: (p) => formatIntegerAxis(p)
+                    }},
+                    // ★ V91 Fix: Legend 維持 formatBigFixed3 (小數點)
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }} 
                 }});
                 
                 const macdChart = createChart('macd-chart', {{
@@ -565,14 +571,18 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ OBV Chart: formatBigFixed3 (Legend) + formatOBVAxis (Axis)
+                // ★ OBV Chart
                 const obvChart = createChart('obv-chart', {{
                     layout: volObvLayout, 
                     grid: grid, 
                     crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    rightPriceScale: {{ borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}} }},
-                    localization: {{ priceFormatter: (p) => formatOBVAxis(p) }} 
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, 
+                        scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => formatIntegerAxis(p) // OBV Axis 整數
+                    }},
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }} // Legend 小數點
                 }});
                 
                 const biasChart = createChart('bias-chart', {{
@@ -705,7 +715,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 60px
+                    // ★強制鎖定 60px (V90)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
