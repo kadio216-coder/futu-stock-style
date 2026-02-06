@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 介面控制 & 變數定義 (防止 NameError)
+# 2. 介面控制 & 變數定義
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🔍 股票搜尋")
@@ -49,14 +49,14 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
     
-    # 定義是否為台股，供後續使用
+    # 定義是否為台股
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
 # 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="6mo", interval="1d"): # 保持 6mo，讓 OBV 數值量級合理
+def get_data(ticker, period="6mo", interval="1d"):
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -79,7 +79,7 @@ def get_data(ticker, period="6mo", interval="1d"): # 保持 6mo，讓 OBV 數值
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★台股成交量轉「張」 (除以1000)
+        # ★★★ 台股成交量轉「張」 (除以1000) ★★★
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
@@ -113,7 +113,7 @@ def get_data(ticker, period="6mo", interval="1d"): # 保持 6mo，讓 OBV 數值
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV (含 10日均線)
+        # OBV & MA10
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
@@ -290,7 +290,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript
+    # 5. JavaScript (★ 核心改動：整數化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -301,12 +301,14 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
+            /* 一般 Legend */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
+            /* 小字體 Legend (VOL/OBV) */
             .legend-small {{
                 font-size: 9px; 
                 line-height: 14px;
@@ -357,7 +359,9 @@ with col_main:
 
                 const FORCE_WIDTH = 115;
 
+                // 一般字體 (11px)
                 const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 微縮字體 (9px) - 針對VOL/OBV
                 const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -384,32 +388,59 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★精簡小數點：改為 toFixed(1)
+                // ★一般整數格式化 (主圖、MACD等)：不加中文，只取整數
+                function formatStandard(val) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 0, maximumFractionDigits: 0 }});
+                }}
+
+                // ★VOL/OBV 專用：中文單位 + 整數 (toFixed(0))
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(1) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(1) + '萬';
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬';
                     return val.toFixed(0);
                 }}
 
+                // 1. Main: 一般整數
                 const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
+                // 2. VOL: 9px + 中文整數
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                // 3. MACD: 一般整數
+                const macdChart = createChart('macd-chart', {{
+                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                }});
                 
+                // 4. KDJ: 一般整數
+                const kdjChart = createChart('kdj-chart', {{
+                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                }});
+                
+                // 5. RSI: 一般整數
+                const rsiChart = createChart('rsi-chart', {{
+                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                }});
+                
+                // 6. OBV: 9px + 中文整數
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                // 7. BIAS: 一般整數
+                const biasChart = createChart('bias-chart', {{
+                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                }});
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 let rsi6Series, rsi12Series, rsi24Series;
@@ -532,6 +563,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
+                    // ★強制鎖定 115px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
