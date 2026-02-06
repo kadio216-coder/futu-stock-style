@@ -277,7 +277,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V78架構 + Z-Order 修正)
+    # 5. JavaScript (★ 核心：V78架構 + 繪圖順序調換)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -356,7 +356,7 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 字體 11px (V78/V62)
+                // 1. 主圖: 字體 11px (V78/V62原設)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
@@ -422,11 +422,31 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                const mainChart = createChart('main-chart', {{
-                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                // ★ V78: 強制分離 - Axis整數 / Label 2位小數
+                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
+                    width: document.getElementById('main-chart').clientWidth,
+                    height: 450,
+                    layout: mainLayout,
+                    grid: grid,
+                    rightPriceScale: {{
+                        visible: true,
+                        borderColor: '#E0E0E0',
+                        minimumWidth: FORCE_WIDTH,
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
+                        tickMarkFormatter: (price) => {{
+                            return price.toFixed(0); 
+                        }}
+                    }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: crosshair,
+                    localization: {{
+                        priceFormatter: (price) => {{
+                            return price.toFixed(2);
+                        }}
+                    }}
                 }});
                 
+                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
@@ -471,7 +491,7 @@ with col_main:
                     }});
                     candleSeries.setData(candlesData);
 
-                    // ★ 修正重點：先畫 MA，確保它被壓在下面
+                    // ★ 修正順序1：先畫 MA，讓它在底層
                     if (maData.length > 0) {{
                         const f = maData[0];
                         if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
@@ -480,7 +500,7 @@ with col_main:
                         if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
 
-                    // ★ 修正重點：後畫 BOLL，確保 MID (粉紅線) 蓋在 MA20 (紫線) 上面
+                    // ★ 修正順序2：後畫 BOLL，確保 MID 線在最上層
                     if (bollData.length > 0) {{
                         bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID' }}); 
                         bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
@@ -581,7 +601,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 70px (V78)
+                    // ★強制鎖定 70px (V78/V62)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
