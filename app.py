@@ -35,7 +35,7 @@ st.markdown("""
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
     
-    /* 策略儀表板樣式 (4格 + 字體放大) */
+    /* 策略儀表板樣式 (4格 + 字體放大 V89) */
     .strategy-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr); 
@@ -46,7 +46,7 @@ st.markdown("""
         background-color: #fff;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
-        padding: 12px 10px; /* 增加一點內距 */
+        padding: 12px 10px; 
         text-align: center;
         font-family: "Segoe UI", sans-serif;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
@@ -55,9 +55,7 @@ st.markdown("""
         background-color: #E8F5E9; /* 亮綠底 */
         border: 1px solid #4CAF50;
     }
-    /* ★ 修改：標題字體放大 12px -> 14px */
     .strat-title { font-size: 14px; color: #666; font-weight: 600; margin-bottom: 5px; }
-    /* ★ 修改：狀態字體放大 14px -> 16px */
     .strat-status { font-size: 16px; font-weight: bold; color: #333; }
     
     .status-match { color: #2E7D32; } /* 符合條件 */
@@ -169,7 +167,7 @@ def get_data(ticker, period="2y", interval="1d"):
         print(f"Data Error: {e}")
         return None
 
-# --- ★ 四大策略偵測邏輯 ---
+# --- ★ 四大策略偵測邏輯 (V89) ---
 def check_4_strategies(df):
     if len(df) < 30: return {}
     
@@ -179,7 +177,6 @@ def check_4_strategies(df):
     results = {}
     
     # 1. 盤整後帶量突破
-    # 條件：20天震幅<15% + 突破高點 + 量>5日均量*2
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -199,7 +196,6 @@ def check_4_strategies(df):
         results['S1'] = {'active': False, 'msg': '整理中'}
 
     # 2. 均線黃金交叉
-    # 條件：MA20上穿MA60 + 股價>MA120
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -211,7 +207,6 @@ def check_4_strategies(df):
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
     # 3. 布林通道擠壓
-    # 條件：開口<10% + 突破上軌
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -224,7 +219,6 @@ def check_4_strategies(df):
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
     # 4. KD 低檔黃金交叉
-    # 條件：K<20 + K穿過D
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -266,7 +260,7 @@ with col_main:
         st.error(f"無數據: {ticker}")
         st.stop()
     
-    # ★ 顯示四大策略儀表板 (改名+字體加大)
+    # ★ 顯示四大策略儀表板
     strats = check_4_strategies(full_df)
     if strats:
         s1 = strats['S1']
@@ -402,7 +396,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V78架構 + MA先畫)
+    # 5. JavaScript (★ 核心：V78架構 + MA先畫 + 寬度60px)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -412,10 +406,10 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* V62: 左灰右白 */
+            /* ★ V90修正：寬度改為 calc(100% - 60px) */
             .sub-chart {{
                 background-color: #FFFFFF;
-                background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
+                background-image: linear-gradient(to right, #FAFAFA calc(100% - 60px), transparent calc(100% - 60px));
                 background-size: 100% calc(100% - 30px);
                 background-repeat: no-repeat;
                 border-bottom: 1px solid #E0E0E0;
@@ -479,9 +473,10 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                const FORCE_WIDTH = 70;
+                // ★ V90修正：FORCE_WIDTH 從 70 縮減為 60
+                const FORCE_WIDTH = 60;
 
-                // 1. 主圖: 字體 14.5px (V78/V86)
+                // 1. 主圖: 字體 14.5px (V86)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14.5 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
@@ -710,7 +705,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 70px (V78)
+                    // ★強制鎖定 60px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
