@@ -285,7 +285,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：字體分層 + 整數化)
+    # 5. JavaScript (★ 核心：字體 11px/14px/9px 分層)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -354,8 +354,10 @@ with col_main:
 
                 // 1. 主圖字體 (11px)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 2. 副圖指標字體 (13px) - 除主圖外的所有指標
-                const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13 }};
+                // ★2. 一般指標字體 (14px) - MACD, KDJ, RSI, BIAS
+                const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14 }};
+                // 3. 微縮字體 (9px) - VOL, OBV (為了容納單位)
+                const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
@@ -396,43 +398,43 @@ with col_main:
                     return val.toFixed(0);
                 }}
 
-                // ★1. Main: 11px (mainLayout) + 整數
+                // 1. Main: 11px
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // ★2. VOL: 13px (indicatorLayout) + 中文整數
+                // 2. VOL: 9px (Tiny)
                 const volChart = createChart('vol-chart', {{
-                    ...getOpts(indicatorLayout, {{top: 0.2, bottom: 0}}),
+                    ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // ★3. MACD: 13px (indicatorLayout) + 整數
+                // 3. MACD: 14px (Indicator)
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // ★4. KDJ: 13px + 整數
+                // 4. KDJ: 14px (Indicator)
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // ★5. RSI: 13px + 整數
+                // 5. RSI: 14px (Indicator)
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // ★6. OBV: 13px + 中文整數
+                // 6. OBV: 9px (Tiny)
                 const obvChart = createChart('obv-chart', {{
-                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // ★7. BIAS: 13px + 整數
+                // 7. BIAS: 14px (Indicator)
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
