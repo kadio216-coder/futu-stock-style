@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (V62邏輯 + OBV一季修正)
+# 3. 資料層 (MACD長線 + OBV半年)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -114,11 +114,11 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # 3. ★ 切割資料：只保留最後一季 (約 65 個交易日)
-        # 這樣做會讓前面的長歷史被切斷，但保留了上面算好的 MACD 值
-        data = data.tail(65).copy()
+        # 3. ★ 切割資料：保留最後半年 (約 130 個交易日)
+        # 這樣 OBV 累加基期會拉長到半年，數值會比一季大，但比兩年小
+        data = data.tail(130).copy()
 
-        # 4. ★ 重算 OBV：現在它是基於這 65 天開始累加，數值會變小 (40萬等級)
+        # 4. ★ 重算 OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
@@ -164,7 +164,7 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ 這裡拿到的 full_df 已經只有 65 天了
+    # ★ 取得半年份的資料
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -173,17 +173,16 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '3m' # 預設改為 3m
+    if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m' 
     if 'slider_range' not in st.session_state:
         st.session_state['slider_range'] = (min_d, max_d)
 
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
         st.session_state['active_btn'] = btn_key
         end = max_d
-        start = min_d # 因為資料已經被截斷為一季，其實 Slider 能拉的範圍很小
+        start = min_d 
         st.session_state['slider_range'] = (start, end)
 
-    # 由於資料只有一季，這裡的按鈕功能其實受限，但為了介面完整保留
     btn_cols = st.columns(7)
     buttons = [
         {"label": "1月", "key": "1m", "m": 1, "y": 0, "ytd": False, "max": False},
@@ -556,18 +555,7 @@ with col_main:
                         }}
                     }}
                     
-                    if (macdLegendEl && macdData.length > 0) {{ 
-                        const d = macdData.find(x => x.time === t); 
-                        if (d && d.dif!=null) {{
-                            macdLegendEl.innerHTML=`<div class="legend-row">
-                                <span class="legend-label">MACD(12,26,9)</span>
-                                <span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span>
-                                <span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span>
-                                <span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span>
-                            </div>`; 
-                        }} 
-                    }}
-
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
@@ -591,7 +579,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 115px (V62 設定)
+                    // ★強制鎖定 70px (精準對齊，無白邊)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
@@ -620,5 +608,8 @@ with col_main:
     if show_rsi: total_height += 120
     if show_obv: total_height += 120
     if show_bias: total_height += 120
+    
+    # ★ 這裡加上 50px 的安全邊距，防止最後一個圖被切掉
+    total_height += 50 
 
     components.html(html_code, height=total_height)
