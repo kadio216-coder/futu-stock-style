@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (★ 核心修正：MACD 用長資料，OBV 用短資料)
+# 3. 資料層 (維持 2y)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -60,7 +60,6 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
-        # 1. 先下載 2年 資料 (為了 MACD 準確)
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
@@ -82,8 +81,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # --- 第一階段：計算需要長週期的指標 (MACD, MA, BOLL) ---
-        # 這樣做可以確保 EMA 已經收斂，數值跟看盤軟體一樣
+        # --- 指標計算 ---
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
@@ -97,18 +95,6 @@ def get_data(ticker, period="2y", interval="1d"):
         macd = ta.macd(data[close_col], fast=12, slow=26, signal=9)
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # --- 第二階段：截斷資料 (Reset Base) ---
-        # 為了讓 OBV 數值變小（像您的圖源只有幾萬，而不是幾百萬）
-        # 我們只保留最近 150 天 (約 7-8 個月) 的資料
-        # 這樣 MACD 的值是從 2年前算過來的(準的)，但 OBV 會從 150 天前開始算(小的)
-        data = data.tail(150).copy() 
-
-        # --- 第三階段：計算短週期/累加型指標 (OBV) ---
-        # 這裡的 OBV 會從這 150 天的第一天開始從 0 累加，數值就會很小了
-        data['OBV'] = ta.obv(data[close_col], data['volume'])
-        data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
-
-        # 其他不需要長週期的指標
         low_list = data['low'].rolling(9, min_periods=1).min()
         high_list = data['high'].rolling(9, min_periods=1).max()
         rsv = (data[close_col] - low_list) / (high_list - low_list) * 100
@@ -119,6 +105,9 @@ def get_data(ticker, period="2y", interval="1d"):
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
+
+        data['OBV'] = ta.obv(data[close_col], data['volume'])
+        data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
@@ -169,7 +158,6 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ 這裡取得的 df 已經是經過 tail(150) 處理過的，所以 OBV 數值會正常
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -180,8 +168,7 @@ with col_main:
     
     if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m'
     if 'slider_range' not in st.session_state:
-        # 因為已經是 tail(150) 了，預設顯示可以全開
-        default_start = min_d 
+        default_start = max_d - timedelta(days=180)
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
@@ -292,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：Main強制分離 + V62風格)
+    # 5. JavaScript (★ 核心：CSS 精準區塊著色 + 70px 寬度)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -302,12 +289,16 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* V62.0 風格：左灰右白 */
+            /* ★ 副圖精準背景 */
+            /* 1. background-color: #FFFFFF (底色為白，給右軸和下軸用) */
+            /* 2. linear-gradient: 灰色(#FAFAFA)只填滿 100% - 70px (圖表區)，右邊 70px 透明 */
+            /* 3. background-size: 高度只佔 100% - 30px (避開下方日期軸) */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
                 background-size: 100% calc(100% - 30px);
                 background-repeat: no-repeat;
+                
                 border-bottom: 1px solid #E0E0E0;
                 margin-bottom: 10px;
             }}
@@ -369,12 +360,13 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
+                // ★ 強制寬度 70px (更緊湊，消除多餘白邊)
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 字體 15px (放大)
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 15 }};
+                // 1. 主圖: 白色
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
                 
-                // 2. 副圖: 透明, 字體 14/11.5
+                // 2. 副圖: 透明 (讓 CSS 灰白分區顯示)
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -402,21 +394,14 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // 一般格式化 (強制 2 位)
-                function formatStandard(val, decimals=2) {{
+                function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
 
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     return parseFloat(val.toFixed(3)).toString();
-                }}
-
-                // ★ 為了 OBV 改回純數值 (不帶萬億)
-                function formatNumber(val, decimals=2) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
                 function formatBigSmart(val) {{
@@ -431,6 +416,11 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
+                function formatFixed3(val) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toFixed(3);
+                }}
+                
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -439,62 +429,36 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ★★★ 1. Main Chart 絕對分離設定 ★★★
-                // 這裡的設置保證: 軸是整數，標籤是2位小數
-                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
-                    width: document.getElementById('main-chart').clientWidth,
-                    height: 450,
-                    layout: mainLayout,
-                    grid: grid,
-                    rightPriceScale: {{
-                        visible: true,
-                        borderColor: '#E0E0E0',
-                        minimumWidth: FORCE_WIDTH,
-                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (price) => {{
-                            return price.toFixed(0); // 軸：強制整數
-                        }}
-                    }},
-                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    crosshair: crosshair,
-                    localization: {{
-                        priceFormatter: (price) => {{
-                            return price.toFixed(2); // 標籤：強制2位
-                        }}
-                    }}
+                const mainChart = createChart('main-chart', {{
+                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // 3. MACD
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 4. KDJ
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 5. RSI
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ 6. OBV Chart: 使用 formatNumber (正常數值，不縮寫)
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatNumber(p, 2) }}
+                    localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
@@ -524,10 +488,10 @@ with col_main:
 
                     if (maData.length > 0) {{
                         const f = maData[0];
-                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA5' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
-                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA10' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
-                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA20' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
-                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA60' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
+                        if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
+                        if (f.ma10 !== undefined) {{ ma10Series = mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)' }}); ma10Series.setData(maData.map(d => ({{ time: d.time, value: d.ma10 }}))); }}
+                        if (f.ma20 !== undefined) {{ ma20Series = mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA(20)' }}); ma20Series.setData(maData.map(d => ({{ time: d.time, value: d.ma20 }}))); }}
+                        if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
                 }}
                 
@@ -587,8 +551,8 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
@@ -612,12 +576,11 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // ★ OBV Legend: 使用 formatNumber (正常數值，無單位)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            const obvVal = formatNumber(d.obv, 2);
-                            const maVal = d.obv_ma ? formatNumber(d.obv_ma, 2) : '-';
+                            const obvVal = formatBigFixed3(d.obv);
+                            const maVal = d.obv_ma ? formatBigFixed3(d.obv_ma) : '-';
                             obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{obvVal}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{maVal}}</span></div>`;
                         }}
                     }}
