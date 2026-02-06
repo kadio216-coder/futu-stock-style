@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：CSS 精準區塊著色 + 70px 寬度)
+    # 5. JavaScript (★ 核心：Main Chart Font 15px + 0小數)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,16 +289,12 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
-            /* ★ 副圖精準背景 */
-            /* 1. background-color: #FFFFFF (底色為白，給右軸和下軸用) */
-            /* 2. linear-gradient: 灰色(#FAFAFA)只填滿 100% - 70px (圖表區)，右邊 70px 透明 */
-            /* 3. background-size: 高度只佔 100% - 30px (避開下方日期軸) */
+            /* 副圖精準背景: 左灰右白 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 70px), transparent calc(100% - 70px));
                 background-size: 100% calc(100% - 30px);
                 background-repeat: no-repeat;
-                
                 border-bottom: 1px solid #E0E0E0;
                 margin-bottom: 10px;
             }}
@@ -360,13 +356,12 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★ 強制寬度 70px (更緊湊，消除多餘白邊)
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 白色
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // ★ 1. 主圖: 字體 15px (放大)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 15 }};
                 
-                // 2. 副圖: 透明 (讓 CSS 灰白分區顯示)
+                // 2. 副圖: 透明 (透出 CSS 漸層), 字體維持 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
@@ -394,9 +389,10 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                function formatStandard(val) {{
+                // 一般格式化
+                function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
                 function formatSmart(val) {{
@@ -429,36 +425,43 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
+                // ★ 1. Main Chart: 使用 0 小數位 (整數顯示)
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p, 0) }} 
                 }});
                 
+                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
+                // 3. MACD
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // 4. KDJ
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // 5. RSI
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
+                // 6. OBV
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
+                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
