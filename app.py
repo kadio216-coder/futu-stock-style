@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：統一字體 11px + 強制寬度 115px)
+    # 5. JavaScript (★ 核心改動：分層字體 + 強制對齊)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -289,8 +289,6 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
-            
-            /* Legend 字體 11px (正常大小，不縮水) */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
@@ -340,22 +338,31 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心：強制統一寬度 115px (因為有智能縮寫，115足夠容納"xx.xx億")
+                // ★核心：強制所有圖表右邊保留 115px，保證 K 線垂直對齊
                 const FORCE_WIDTH = 115;
 
-                // ★核心：統一字體 11px (解決日期大小不一的問題)
-                const commonOptions = {{
-                    layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }},
-                    grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
-                    rightPriceScale: {{ 
-                        borderColor: '#E0E0E0', 
-                        visible: true,
-                        minimumWidth: FORCE_WIDTH,
-                        scaleMargins: {{ top: 0.1, bottom: 0.1 }}
-                    }},
-                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-                }};
+                // 一般圖表設定 (字體 11px)
+                const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 大數值圖表設定 (字體 10px，給 VOL/OBV 用)
+                const smallLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 10 }};
+
+                const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
+                const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
+
+                function getOpts(layout, scaleMargins) {{
+                    return {{
+                        layout: layout,
+                        grid: grid,
+                        rightPriceScale: {{ 
+                            borderColor: '#E0E0E0', 
+                            visible: true,
+                            minimumWidth: FORCE_WIDTH, // ★關鍵：寬度鎖死
+                            scaleMargins: scaleMargins
+                        }},
+                        timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                        crosshair: crosshair,
+                    }};
+                }}
 
                 function createChart(id, opts) {{
                     const el = document.getElementById(id);
@@ -373,21 +380,32 @@ with col_main:
                     return num.toFixed(0) + unit;
                 }}
 
-                // 所有圖表使用相同的 commonOptions (11px, 115px)
-                const mainChart = createChart('main-chart', commonOptions);
+                // 1. 主圖：正常字體 11px
+                const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 2. 成交量：小字體 10px + 智能縮寫
                 const volChart = createChart('vol-chart', {{
-                    ...commonOptions, 
-                    rightPriceScale: {{ ...commonOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
+                    ...getOpts(smallLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
-                const macdChart = createChart('macd-chart', commonOptions);
-                const kdjChart = createChart('kdj-chart', commonOptions);
-                const rsiChart = createChart('rsi-chart', commonOptions);
+                
+                // 3. MACD：正常字體
+                const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 4. KDJ：正常字體
+                const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 5. RSI：正常字體
+                const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 6. OBV：小字體 10px + 智能縮寫
                 const obvChart = createChart('obv-chart', {{
-                    ...commonOptions,
+                    ...getOpts(smallLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatVol(p) }}
                 }});
-                const biasChart = createChart('bias-chart', commonOptions);
+                
+                // 7. BIAS：正常字體
+                const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 let rsi6Series, rsi12Series, rsi24Series;
@@ -501,8 +519,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定寬度
-                    c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
+                    // ★強制鎖定 115px + 綁定事件
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
                         if (range) allCharts.forEach(other => {{ if (other !== c) other.timeScale().setVisibleLogicalRange(range); }});
