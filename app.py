@@ -38,10 +38,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (核心修正：台股成交量 / 1000)
+# 2. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="2y", interval="1d"):
+def get_data(ticker, period="5y", interval="1d"): # 預設改為 5y，避免 OBV 累加數值過大
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -53,6 +53,7 @@ def get_data(ticker, period="2y", interval="1d"):
         data.index = data.index.tz_localize(None)
         
         data.columns = [c.capitalize() for c in data.columns]
+        
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         elif is_quarterly:
@@ -64,11 +65,10 @@ def get_data(ticker, period="2y", interval="1d"):
         if close_col not in data.columns: return None
 
         # ★★★ 核心修正：台股成交量強制轉「張」 (除以1000) ★★★
-        # 這樣 OBV 累加時基數變小，數值就會變成「萬」等級，而不是「億」
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 指標計算 (現在是用張數算)
+        # 指標計算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
@@ -98,10 +98,8 @@ def get_data(ticker, period="2y", interval="1d"):
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV (基於張數)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
 
-        # BIAS
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -136,9 +134,14 @@ with st.sidebar:
     st.header("🔍 股票搜尋")
     market_mode = st.radio("市場", ["台股(市)", "台股(櫃)", "美股"], index=2, horizontal=True)
     raw_symbol = st.text_input("代碼", value="2330")
+    
+    # ★修復 NameError：在此處先定義好 ticker 和 is_tw_stock
     if market_mode == "台股(市)": ticker = f"{raw_symbol}.TW" if not raw_symbol.upper().endswith(".TW") else raw_symbol
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
+    
+    # 這裡定義好變數，確保後面 JS 絕對讀得到
+    is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 col_main, col_tools = st.columns([0.85, 0.15])
 
@@ -162,7 +165,8 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
+    # 這裡改用 "5y" 而不是 "max"，避免 OBV 累加值過大
+    full_df = get_data(ticker, period="5y", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
@@ -283,7 +287,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：VOL/OBV 9px, 中文單位萬/億, 寬度115)
+    # 5. JavaScript
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -294,14 +298,14 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* 一般 Legend */
+            /* 一般字體 11px */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
-            /* 小字體 Legend (VOL/OBV) */
+            /* 小字體 9px (VOL/OBV) */
             .legend-small {{
                 font-size: 9px; 
                 line-height: 14px;
@@ -346,16 +350,17 @@ with col_main:
                 const rsiData = {rsi_json};
                 const obvData = {obv_json};
                 const biasData = {bias_json};
+                
+                // 這裡絕對安全，因為 Python 端已經先定義了
                 const isTW = {str(is_tw_stock).lower()};
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心：強制統一寬度 115px (保證對齊)
                 const FORCE_WIDTH = 115;
 
-                // 一般字體 (11px)
+                // 一般字體 11px
                 const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // ★微縮字體 (9px) - 針對VOL/OBV
+                // 微縮字體 9px (VOL/OBV)
                 const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -368,7 +373,7 @@ with col_main:
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', 
                             visible: true,
-                            minimumWidth: FORCE_WIDTH,
+                            minimumWidth: FORCE_WIDTH, 
                             scaleMargins: scaleMargins
                         }},
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
@@ -382,42 +387,33 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★中文單位格式化 (Python已除1000，現在數值是張數)
+                // 中文單位萬/億
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    // 如果累加到超過1億張，顯示億；否則顯示萬
                     if (absVal >= 100000000) return (val / 100000000).toFixed(2) + '億';
                     if (absVal >= 10000) return (val / 10000).toFixed(2) + '萬';
-                    // 小於一萬張直接顯示數字
                     return val.toFixed(0);
                 }}
 
-                // 1. Main: 正常字體 11px
                 const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // 2. VOL: ★極小字體 9px + 中文單位
+                // VOL: 9px + 中文
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 3. MACD: 11px
                 const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 4. KDJ: 11px
                 const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
-                
-                // 5. RSI: 11px
                 const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // 6. OBV: ★極小字體 9px + 中文單位
+                // OBV: 9px + 中文
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 7. BIAS: 11px
                 const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -532,7 +528,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 115px
+                    // ★強制鎖定 115px + 綁定事件
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
