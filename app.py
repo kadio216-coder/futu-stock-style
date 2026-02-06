@@ -49,7 +49,6 @@ with st.sidebar:
     elif market_mode == "台股(櫃)": ticker = f"{raw_symbol}.TWO" if not raw_symbol.upper().endswith(".TWO") else raw_symbol
     else: ticker = raw_symbol.upper()
     
-    # 定義是否為台股
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
@@ -79,7 +78,7 @@ def get_data(ticker, period="6mo", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★★★ 台股成交量轉「張」 (除以1000) ★★★
+        # 台股成交量除以 1000
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
@@ -113,7 +112,6 @@ def get_data(ticker, period="6mo", interval="1d"):
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV & MA10
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
@@ -216,9 +214,6 @@ with col_main:
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
-    # ---------------------------------------------------------
-    # 4. JSON 序列化
-    # ---------------------------------------------------------
     def to_json_list(df, cols):
         res = []
         df_clean = df.where(pd.notnull(df), None)
@@ -290,7 +285,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：整數化)
+    # 5. JavaScript (★ 核心：全指標整數化 + 主圖整數化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -301,14 +296,12 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* 一般 Legend */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
-            /* 小字體 Legend (VOL/OBV) */
             .legend-small {{
                 font-size: 9px; 
                 line-height: 14px;
@@ -359,9 +352,7 @@ with col_main:
 
                 const FORCE_WIDTH = 115;
 
-                // 一般字體 (11px)
                 const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 微縮字體 (9px) - 針對VOL/OBV
                 const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
@@ -388,13 +379,13 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★一般整數格式化 (主圖、MACD等)：不加中文，只取整數
+                // 一般整數格式化 (無中文單位)
                 function formatStandard(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: 0, maximumFractionDigits: 0 }});
                 }}
 
-                // ★VOL/OBV 專用：中文單位 + 整數 (toFixed(0))
+                // VOL/OBV 專用: 中文單位 + 整數
                 function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -403,8 +394,11 @@ with col_main:
                     return val.toFixed(0);
                 }}
 
-                // 1. Main: 一般整數
-                const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                // ★1. Main: 加上 priceFormatter (整數)
+                const mainChart = createChart('main-chart', {{
+                    ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                }});
                 
                 // 2. VOL: 9px + 中文整數
                 const volChart = createChart('vol-chart', {{
@@ -412,19 +406,19 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 3. MACD: 一般整數
+                // 3. MACD: 整數
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 4. KDJ: 一般整數
+                // 4. KDJ: 整數
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
                 }});
                 
-                // 5. RSI: 一般整數
+                // 5. RSI: 整數
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
@@ -436,7 +430,7 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                // 7. BIAS: 一般整數
+                // 7. BIAS: 整數
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }}
@@ -529,8 +523,9 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">EMA</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
+                    // ★ Legend 數值也改為整數 toFixed(0)
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">EMA</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">EMA5:${{d.ma5.toFixed(0)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">EMA10:${{d.ma10.toFixed(0)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">EMA20:${{d.ma20.toFixed(0)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">EMA60:${{d.ma60.toFixed(0)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(0)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(0):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(0):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
@@ -539,9 +534,9 @@ with col_main:
                         }}
                     }}
                     
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
-                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
-                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI</span><span class="legend-value" style="color:#E6A23C">RSI1: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI3: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(0)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(0)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(0)}}</span></div>`; }}
+                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(0)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(0)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(0)}}</span></div>`; }}
+                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI</span><span class="legend-value" style="color:#E6A23C">RSI1: ${{d.rsi6!=null?d.rsi6.toFixed(0):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI2: ${{d.rsi12!=null?d.rsi12.toFixed(0):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI3: ${{d.rsi24!=null?d.rsi24.toFixed(0):'-'}}</span></div>`; }}
                     
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
@@ -555,7 +550,7 @@ with col_main:
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{d.b6!=null?d.b6.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(3):'-'}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{d.b6!=null?d.b6.toFixed(0):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(0):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(0):'-'}}</span></div>`;
                         }}
                     }}
                 }}
@@ -563,7 +558,6 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 115px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
