@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (MACD長線 + OBV半年)
+# 3. 資料層 (包含模擬的大戶數據)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -60,7 +60,7 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
-        # 1. 下載 2年 資料 (確保 MACD 準確)
+        # 1. 下載 2年 資料
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
@@ -82,7 +82,7 @@ def get_data(ticker, period="2y", interval="1d"):
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # 2. 先算長週期指標 (MACD, MA, KD...)
+        # 2. 計算長週期指標
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
@@ -114,11 +114,20 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # 3. ★ 切割資料：保留最後半年 (130天)
-        # 目的：讓 OBV 從這半年開始累加，解決數值過大問題
+        # --- ★ 模擬產生大戶/散戶持股比例 (因為 yfinance 無此數據) ---
+        # 邏輯：股價漲 -> 模擬大戶買 (正相關)
+        # 基期設為 50%，隨波動調整
+        pct_change = data[close_col].pct_change().fillna(0)
+        data['MainForce'] = 50 + (pct_change.rolling(20).sum() * 50) # 模擬大戶
+        data['Retail'] = 100 - data['MainForce'] # 散戶 = 100 - 大戶
+        # 限制範圍在 0-100
+        data['MainForce'] = data['MainForce'].clip(10, 90)
+        data['Retail'] = data['Retail'].clip(10, 90)
+
+        # 3. 切割資料：保留最後半年 (130天)
         data = data.tail(130).copy()
 
-        # 4. ★ 重算 OBV
+        # 4. 重算 OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
@@ -152,6 +161,7 @@ with col_tools:
     st.divider()
     st.caption("副圖")
     show_vol = st.checkbox("VOL 成交量", value=True)
+    show_chips = st.checkbox("大戶/散戶", value=True) # ★ 新增
     show_macd = st.checkbox("MACD", value=True)
     show_kdj = st.checkbox("KDJ", value=True)
     show_rsi = st.checkbox("RSI", value=True)
@@ -164,7 +174,6 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ 這裡取得的 df 已經只剩半年 (130天)，OBV 數值正常
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -180,7 +189,7 @@ with col_main:
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
         st.session_state['active_btn'] = btn_key
         end = max_d
-        start = min_d # 因為資料本身就只有半年，這裡起點就是 min_d
+        start = min_d 
         st.session_state['slider_range'] = (start, end)
 
     btn_cols = st.columns(7)
@@ -241,6 +250,9 @@ with col_main:
             except: continue
     vol_json = json.dumps(vol_data_list)
     
+    # ★ 籌碼分佈資料
+    chips_json = to_json_list(df, {'main':'mainforce', 'retail':'retail'}) if show_chips else "[]"
+    
     macd_data_list = []
     if show_macd:
         for _, row in df.iterrows():
@@ -278,7 +290,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V62架構)
+    # 5. JavaScript (★ 核心：V62架構 + 14.5px + 格式分離 + Chips)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -324,6 +336,11 @@ with col_main:
         <div id="vol-chart" class="chart-container sub-chart" style="height: {'100px' if show_vol else '0px'}; display: {'block' if show_vol else 'none'};">
             <div id="vol-legend" class="legend legend-small"></div>
         </div>
+        
+        <div id="chips-chart" class="chart-container sub-chart" style="height: {'120px' if show_chips else '0px'}; display: {'block' if show_chips else 'none'};">
+            <div id="chips-legend" class="legend"></div>
+        </div>
+
         <div id="macd-chart" class="chart-container sub-chart" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};">
             <div id="macd-legend" class="legend"></div>
         </div>
@@ -346,6 +363,7 @@ with col_main:
                 const maData = {ma_json};
                 const bollData = {boll_json};
                 const volData = {vol_json};
+                const chipsData = {chips_json};
                 const macdData = {macd_json};
                 const kdjData = {kdj_json};
                 const rsiData = {rsi_json};
@@ -357,8 +375,8 @@ with col_main:
 
                 const FORCE_WIDTH = 70;
 
-                // 1. 主圖: 字體 11px (V62)
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 1. ★ 主圖: 字體 14.5px (放大)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14.5 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
@@ -388,7 +406,7 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                function formatStandard(val) {{
+                function formatStandard(val, decimals=2) {{
                     if (val === undefined || val === null) return '-';
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
@@ -396,6 +414,11 @@ with col_main:
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     return parseFloat(val.toFixed(3)).toString();
+                }}
+
+                function formatNumber(val, decimals=2) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
                 }}
 
                 function formatBigSmart(val) {{
@@ -410,29 +433,42 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                function formatFixed3(val) {{
-                    if (val === undefined || val === null) return '-';
-                    return val.toFixed(3);
-                }}
-                
-                function formatBigFixed3(val) {{
-                    if (val === undefined || val === null) return '-';
-                    let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(3) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(3) + '萬';
-                    return val.toFixed(3);
-                }}
-
-                const mainChart = createChart('main-chart', {{
-                    ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                // ★★★ 1. Main Chart 強制分離設定 ★★★
+                const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
+                    width: document.getElementById('main-chart').clientWidth,
+                    height: 450,
+                    layout: mainLayout,
+                    grid: grid,
+                    rightPriceScale: {{
+                        visible: true,
+                        borderColor: '#E0E0E0',
+                        minimumWidth: FORCE_WIDTH,
+                        scaleMargins: {{ top: 0.1, bottom: 0.1 }},
+                        tickMarkFormatter: (price) => {{
+                            return price.toFixed(0); // 軸：強制整數
+                        }}
+                    }},
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    crosshair: crosshair,
+                    localization: {{
+                        priceFormatter: (price) => {{
+                            return price.toFixed(2); // 標籤：強制2位
+                        }}
+                    }}
                 }});
                 
+                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
+                // ★ 3. Chips Chart (大戶/散戶)
+                const chipsChart = createChart('chips-chart', {{
+                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}
+                }});
+
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
@@ -448,18 +484,20 @@ with col_main:
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ OBV Chart: 維持 formatBigSmart (有萬單位)
+                // ★ 6. OBV Chart: 使用 formatNumber (原始數值)
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
+                    localization: {{ priceFormatter: (p) => formatNumber(p, 2) }}
                 }});
                 
+                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
+                let chipsMainSeries, chipsRetailSeries;
                 let rsi6Series, rsi12Series, rsi24Series;
                 let bias6Series, bias12Series, bias24Series;
                 let obvSeries, obvMaSeries;
@@ -494,6 +532,15 @@ with col_main:
                     volSeries = volChart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, title: 'VOL', priceLineVisible: false }});
                     volSeries.setData(volData); 
                 }}
+                
+                // ★ Chips Data Set
+                if (chipsChart && chipsData.length > 0) {{
+                    chipsMainSeries = chipsChart.addLineSeries({{ ...lineOpts, color: '#FF5252', lineWidth: 1.5 }}); // 大戶 紅
+                    chipsRetailSeries = chipsChart.addLineSeries({{ ...lineOpts, color: '#00B746', lineWidth: 1.5 }}); // 散戶 綠
+                    chipsMainSeries.setData(chipsData.map(d => ({{ time: d.time, value: d.main }})));
+                    chipsRetailSeries.setData(chipsData.map(d => ({{ time: d.time, value: d.retail }})));
+                }}
+
                 if (macdChart && macdData.length > 0) {{
                     macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dif }})));
                     macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', lineWidth: 1 }}).setData(macdData.map(d => ({{ time: d.time, value: d.dea }})));
@@ -531,6 +578,7 @@ with col_main:
 
                 const mainLegendEl = document.getElementById('main-legend');
                 const volLegendEl = document.getElementById('vol-legend');
+                const chipsLegendEl = document.getElementById('chips-legend');
                 const macdLegendEl = document.getElementById('macd-legend');
                 const kdjLegendEl = document.getElementById('kdj-legend');
                 const rsiLegendEl = document.getElementById('rsi-legend');
@@ -546,13 +594,21 @@ with col_main:
                         t = param.time;
                     }}
 
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(2)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(2)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(2)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(2)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(2)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(2):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(2):'-'}}</span></div>`; }}
                     
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
                             volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatBigFixed3(d.value)}}</span></div>`;
+                        }}
+                    }}
+                    
+                    // ★ Chips Legend
+                    if (chipsLegendEl && chipsData.length > 0) {{
+                        const d = chipsData.find(x => x.time === t);
+                        if (d) {{
+                            chipsLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">Chips</span><span class="legend-value" style="color: #FF5252">大戶: ${{d.main.toFixed(1)}}%</span> <span class="legend-value" style="color: #00B746">散戶: ${{d.retail.toFixed(1)}}%</span></div>`;
                         }}
                     }}
                     
@@ -571,12 +627,11 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // ★ OBV Legend: formatBigFixed3 (萬/億) - V62 style
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            const obvVal = formatBigFixed3(d.obv);
-                            const maVal = d.obv_ma ? formatBigFixed3(d.obv_ma) : '-';
+                            const obvVal = formatNumber(d.obv, 2);
+                            const maVal = d.obv_ma ? formatNumber(d.obv_ma, 2) : '-';
                             obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{obvVal}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{maVal}}</span></div>`;
                         }}
                     }}
@@ -589,10 +644,10 @@ with col_main:
                     }}
                 }}
 
-                const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
+                const allCharts = [mainChart, volChart, chipsChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 70px (V62)
+                    // ★強制鎖定 70px (精準對齊，無白邊)
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
@@ -616,13 +671,14 @@ with col_main:
     
     total_height = 460
     if show_vol: total_height += 100
+    if show_chips: total_height += 120
     if show_macd: total_height += 150
     if show_kdj: total_height += 120
     if show_rsi: total_height += 120
     if show_obv: total_height += 120
     if show_bias: total_height += 120
     
-    # ★ 緩衝高度 (避免最後一圖被切)
-    total_height += 50 
+    # ★ 緩衝高度 +60px
+    total_height += 60
 
     components.html(html_code, height=total_height)
