@@ -35,7 +35,7 @@ st.markdown("""
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
     
-    /* 策略儀表板樣式 (改為4格) */
+    /* 策略儀表板樣式 (4格 + 字體放大) */
     .strategy-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr); 
@@ -46,7 +46,7 @@ st.markdown("""
         background-color: #fff;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
-        padding: 10px;
+        padding: 12px 10px; /* 增加一點內距 */
         text-align: center;
         font-family: "Segoe UI", sans-serif;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
@@ -55,8 +55,11 @@ st.markdown("""
         background-color: #E8F5E9; /* 亮綠底 */
         border: 1px solid #4CAF50;
     }
-    .strat-title { font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px; }
-    .strat-status { font-size: 14px; font-weight: bold; color: #333; }
+    /* ★ 修改：標題字體放大 12px -> 14px */
+    .strat-title { font-size: 14px; color: #666; font-weight: 600; margin-bottom: 5px; }
+    /* ★ 修改：狀態字體放大 14px -> 16px */
+    .strat-status { font-size: 16px; font-weight: bold; color: #333; }
+    
     .status-match { color: #2E7D32; } /* 符合條件 */
     .status-wait { color: #9E9E9E; }  /* 未符合 */
 </style>
@@ -177,7 +180,7 @@ def check_4_strategies(df):
     
     # 1. 盤整後帶量突破
     # 條件：20天震幅<15% + 突破高點 + 量>5日均量*2
-    past_20 = df.iloc[-21:-1] # 過去20天 (不含當天)
+    past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
     amp = (box_high - box_low) / box_low
@@ -263,7 +266,7 @@ with col_main:
         st.error(f"無數據: {ticker}")
         st.stop()
     
-    # ★ 顯示四大策略儀表板
+    # ★ 顯示四大策略儀表板 (改名+字體加大)
     strats = check_4_strategies(full_df)
     if strats:
         s1 = strats['S1']
@@ -274,19 +277,19 @@ with col_main:
         st.markdown(f"""
         <div class="strategy-grid">
             <div class="strat-card {'strat-active' if s1['active'] else ''}">
-                <div class="strat-title">1.盤整飆股</div>
+                <div class="strat-title">1. 盤整帶量突破</div>
                 <div class="strat-status { 'status-match' if s1['active'] else 'status-wait' }">{s1['msg']}</div>
             </div>
             <div class="strat-card {'strat-active' if s2['active'] else ''}">
-                <div class="strat-title">2.黃金交叉</div>
+                <div class="strat-title">2. 均線黃金交叉</div>
                 <div class="strat-status { 'status-match' if s2['active'] else 'status-wait' }">{s2['msg']}</div>
             </div>
             <div class="strat-card {'strat-active' if s3['active'] else ''}">
-                <div class="strat-title">3.布林擠壓</div>
+                <div class="strat-title">3. 布林通道擠壓</div>
                 <div class="strat-status { 'status-match' if s3['active'] else 'status-wait' }">{s3['msg']}</div>
             </div>
             <div class="strat-card {'strat-active' if s4['active'] else ''}">
-                <div class="strat-title">4.KD抄底</div>
+                <div class="strat-title">4. KD 低檔黃金交叉</div>
                 <div class="strat-status { 'status-match' if s4['active'] else 'status-wait' }">{s4['msg']}</div>
             </div>
         </div>
