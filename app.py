@@ -52,10 +52,10 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層
+# 3. 資料層 (維持 2y)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="6mo", interval="1d"):
+def get_data(ticker, period="2y", interval="1d"):
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -78,27 +78,23 @@ def get_data(ticker, period="6mo", interval="1d"):
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # 單位修正：台股成交量 / 1000
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # --- MA ---
+        # --- 指標計算 ---
         data['MA5'] = ta.sma(data[close_col], length=5)
         data['MA10'] = ta.sma(data[close_col], length=10)
         data['MA20'] = ta.sma(data[close_col], length=20)
         data['MA60'] = ta.sma(data[close_col], length=60)
         
-        # --- BOLL ---
         data['boll_mid'] = data[close_col].rolling(window=20).mean()
         data['boll_std'] = data[close_col].rolling(window=20).std()
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
         
-        # --- MACD ---
         macd = ta.macd(data[close_col], fast=12, slow=26, signal=9)
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # --- KDJ ---
         low_list = data['low'].rolling(9, min_periods=1).min()
         high_list = data['high'].rolling(9, min_periods=1).max()
         rsv = (data[close_col] - low_list) / (high_list - low_list) * 100
@@ -106,16 +102,13 @@ def get_data(ticker, period="6mo", interval="1d"):
         data['d'] = data['k'].ewm(alpha=1/3, adjust=False).mean()
         data['j'] = 3 * data['k'] - 2 * data['d']
 
-        # --- RSI ---
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # --- OBV ---
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
 
-        # --- BIAS ---
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -148,7 +141,7 @@ col_main, col_tools = st.columns([0.85, 0.15])
 with col_tools:
     st.markdown("#### ⚙️ 指標")
     st.caption("主圖")
-    show_ma = st.checkbox("MA (EMA)", value=True)
+    show_ma = st.checkbox("MA (SMA)", value=True)
     show_boll = st.checkbox("BOLL", value=True)
     st.divider()
     st.caption("副圖")
@@ -165,7 +158,7 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    full_df = get_data(ticker, period="6mo", interval=interval_map[interval_label])
+    full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
@@ -175,7 +168,7 @@ with col_main:
     
     if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m'
     if 'slider_range' not in st.session_state:
-        default_start = max_d - timedelta(days=90)
+        default_start = max_d - timedelta(days=180)
         if default_start < min_d: default_start = min_d
         st.session_state['slider_range'] = (default_start, max_d)
 
@@ -286,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：Smart Formatter)
+    # 5. JavaScript (★ 核心：MACD標準化 + 副圖底色變數)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -304,7 +297,7 @@ with col_main:
                 font-weight: 500; pointer-events: none;
             }}
             .legend-small {{
-                font-size: 11px; 
+                font-size: 11.5px; 
                 line-height: 16px;
             }}
             
@@ -352,13 +345,16 @@ with col_main:
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
                 const FORCE_WIDTH = 115;
+                
+                // ★ 副圖底色設定 (您可以在此修改)
+                const subChartBgColor = '#FAFAFA'; // 極淡的灰色，區分副圖與主圖
 
-                // 1. 主圖字體 (11px)
+                // 1. 主圖字體
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 2. 指標字體 (14px)
-                const indicatorLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14 }};
-                // 3. VOL/OBV字體 (11.5px)
-                const volObvLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11.5 }};
+                // 2. 指標字體 (含副圖底色)
+                const indicatorLayout = {{ backgroundColor: subChartBgColor, textColor: '#333333', fontSize: 14 }};
+                // 3. VOL/OBV字體 (含副圖底色)
+                const volObvLayout = {{ backgroundColor: subChartBgColor, textColor: '#333333', fontSize: 11.5 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
@@ -389,14 +385,11 @@ with col_main:
                     return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                 }}
 
-                // ★ 一般指標 Smart: 整數去零，小數保留
                 function formatSmart(val) {{
                     if (val === undefined || val === null) return '-';
-                    // 先取 3 位小數字串，再轉 float 去除尾部零
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ 大數 Smart: 整數顯示單位(去零)，小數顯示單位+小數
                 function formatBigSmart(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -409,7 +402,6 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ Legend 固定 3 位小數 (維持您要的精度)
                 function formatFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     return val.toFixed(3);
@@ -423,43 +415,43 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // 1. Main Chart: Standard 2
+                // 1. Main Chart
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // ★ 2. VOL Chart: Smart Big
+                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // ★ 3. MACD: Smart
+                // 3. MACD
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 4. KDJ: Smart
+                // 4. KDJ
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 5. RSI: Smart
+                // 5. RSI
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // ★ 6. OBV: Smart Big
+                // 6. OBV
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // 7. BIAS: Smart
+                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
@@ -552,7 +544,6 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // ★ Legend 統一使用 formatFixed3 / formatBigFixed3
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
@@ -563,7 +554,20 @@ with col_main:
                         }}
                     }}
                     
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
+                    // ★ 核心改動：MACD 回歸標準 (DIF, DEA, MACD)
+                    if (macdLegendEl && macdData.length > 0) {{ 
+                        const d = macdData.find(x => x.time === t); 
+                        if (d && d.dif!=null) {{
+                            // 標準順序: DIF (快), DEA (慢/Signal), MACD (柱/Hist)
+                            macdLegendEl.innerHTML=`<div class="legend-row">
+                                <span class="legend-label">MACD(12,26,9)</span>
+                                <span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span>
+                                <span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span>
+                            </div>`; 
+                        }} 
+                    }}
+
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
@@ -579,7 +583,7 @@ with col_main:
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{d.b6!=null?d.b6.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(3):'-'}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS6: ${{d.b6!=null?d.b6.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(3):'-'}}</span></div>`;
                         }}
                     }}
                 }}
@@ -587,6 +591,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
+                    // ★強制鎖定 115px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
