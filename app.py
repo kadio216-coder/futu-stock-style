@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. 資料層 (核心修正：台股成交量轉張)
+# 2. 資料層 (關鍵修正：台股成交量 / 1000)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -46,22 +46,13 @@ def get_data(ticker, period="2y", interval="1d"):
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
         
-        # 下載資料
         data = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         if data.empty: return None
         
-        # 處理 MultiIndex
-        if isinstance(data.columns, pd.MultiIndex): 
-            data.columns = data.columns.get_level_values(0)
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+        data.index = data.index.tz_localize(None)
         
-        # 移除時區
-        if data.index.tzinfo is not None:
-            data.index = data.index.tz_localize(None)
-        
-        # 欄位名稱標準化
         data.columns = [c.capitalize() for c in data.columns]
-        
-        # 重採樣邏輯
         if interval == "1y":
             data = data.resample('YE').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         elif is_quarterly:
@@ -69,33 +60,29 @@ def get_data(ticker, period="2y", interval="1d"):
 
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         data.columns = [str(col).lower() for col in data.columns]
-        
-        # 尋找 Close 欄位
         close_col = 'close' if 'close' in data.columns else 'adj close'
         if close_col not in data.columns: return None
 
-        # ★★★ 關鍵修正：台股成交量除以 1000 (股 -> 張) ★★★
+        # ★★★ 核心修正：如果是台股，成交量直接除以 1000 (股 -> 張) ★★★
+        # 這樣 OBV 算出來的數值就會是「張數」，不會是天文數字
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
             data['volume'] = data['volume'] / 1000
 
-        # --- 指標計算 (基於張數計算) ---
+        # 指標計算
         data['MA5'] = ta.ema(data[close_col], length=5)
         data['MA10'] = ta.ema(data[close_col], length=10)
         data['MA20'] = ta.ema(data[close_col], length=20)
         data['MA60'] = ta.ema(data[close_col], length=60)
         
-        # BOLL
         data['tp'] = (data['high'] + data['low'] + data[close_col]) / 3
         data['boll_mid'] = data['tp'].rolling(window=20).mean()
         data['boll_std'] = data['tp'].rolling(window=20).std()
         data['boll_upper'] = data['boll_mid'] + (2 * data['boll_std'])
         data['boll_lower'] = data['boll_mid'] - (2 * data['boll_std'])
         
-        # MACD
         macd = ta.macd(data[close_col])
         if macd is not None: data = pd.concat([data, macd], axis=1)
         
-        # KDJ
         stoch = ta.stoch(data['high'], data['low'], data[close_col])
         if stoch is not None: 
             data = pd.concat([data, stoch], axis=1)
@@ -107,15 +94,14 @@ def get_data(ticker, period="2y", interval="1d"):
                 data['j'] = 3 * data['k'] - 2 * data['d']
             except IndexError: pass
 
-        # RSI
         data['RSI6'] = ta.rsi(data[close_col], length=6)
         data['RSI12'] = ta.rsi(data[close_col], length=12)
         data['RSI24'] = ta.rsi(data[close_col], length=24)
 
-        # OBV (現在是用張數計算，數值正常)
+        # OBV (現在是用「張」來累加，數值會正常)
         data['OBV'] = ta.obv(data[close_col], data['volume'])
 
-        # BIAS (6, 12, 24)
+        # BIAS
         sma6 = ta.sma(data[close_col], length=6)
         sma12 = ta.sma(data[close_col], length=12)
         sma24 = ta.sma(data[close_col], length=24)
@@ -123,7 +109,6 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
         
-        # 整理數據
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -227,6 +212,8 @@ with col_main:
     df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
     if df.empty: st.stop()
 
+    is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
+
     # ---------------------------------------------------------
     # 4. JSON 序列化
     # ---------------------------------------------------------
@@ -298,7 +285,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心改動：統一字體 11px + 固定寬度 115px + 純數字格式)
+    # 5. JavaScript (★ 核心改動：VOL/OBV 9px + 中文單位 + 115px)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -309,13 +296,19 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
-            /* 統一 Legend 字體 11px */
+            /* 一般 Legend */
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
                 line-height: 16px; 
                 font-weight: 500; pointer-events: none;
             }}
+            /* VOL/OBV Legend (縮小) */
+            .legend-small {{
+                font-size: 9px; 
+                line-height: 14px;
+            }}
+            
             .legend-row {{ display: flex; gap: 10px; margin-bottom: 2px; }}
             .legend-label {{ font-weight: bold; color: #333; margin-right: 5px; }}
             .legend-value {{ font-family: 'Consolas', 'Monaco', monospace; }}
@@ -326,7 +319,7 @@ with col_main:
             <div id="main-legend" class="legend"></div>
         </div>
         <div id="vol-chart" class="chart-container" style="height: {'100px' if show_vol else '0px'}; display: {'block' if show_vol else 'none'};">
-            <div id="vol-legend" class="legend"></div>
+            <div id="vol-legend" class="legend legend-small"></div>
         </div>
         <div id="macd-chart" class="chart-container" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};">
             <div id="macd-legend" class="legend"></div>
@@ -338,7 +331,7 @@ with col_main:
             <div id="rsi-legend" class="legend"></div>
         </div>
         <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};">
-            <div id="obv-legend" class="legend"></div>
+            <div id="obv-legend" class="legend legend-small"></div>
         </div>
         <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};">
             <div id="bias-legend" class="legend"></div>
@@ -358,22 +351,30 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★核心：強制統一寬度 115px (數字變小了，絕對夠用且對齊)
                 const FORCE_WIDTH = 115;
 
-                // ★核心：統一字體 11px (解決日期大小不一問題)
-                const commonOptions = {{
-                    layout: {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }},
-                    grid: {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }},
-                    rightPriceScale: {{ 
-                        borderColor: '#E0E0E0', 
-                        visible: true,
-                        minimumWidth: FORCE_WIDTH,
-                        scaleMargins: {{ top: 0.1, bottom: 0.1 }}
-                    }},
-                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-                }};
+                // 一般字體 (11px)
+                const normalLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
+                // 縮小字體 (9px) - 給 VOL/OBV
+                const tinyLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 9 }};
+
+                const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
+                const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
+
+                function getOpts(layout, scaleMargins) {{
+                    return {{
+                        layout: layout,
+                        grid: grid,
+                        rightPriceScale: {{ 
+                            borderColor: '#E0E0E0', 
+                            visible: true,
+                            minimumWidth: FORCE_WIDTH,
+                            scaleMargins: scaleMargins
+                        }},
+                        timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                        crosshair: crosshair,
+                    }};
+                }}
 
                 function createChart(id, opts) {{
                     const el = document.getElementById(id);
@@ -381,33 +382,41 @@ with col_main:
                     return LightweightCharts.createChart(el, opts);
                 }}
 
-                // ★純數字格式化 (不加單位，只加逗號)
-                function formatRaw(val, decimals=0) {{
+                // ★智能中文單位 (Python已轉張數，這裡只負責顯式 億/萬)
+                function formatBigNumber(val) {{
                     if (val === undefined || val === null) return '-';
-                    // 直接顯示數字，加上千分位逗號
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }});
+                    let absVal = Math.abs(val);
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(2) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(2) + '萬';
+                    return val.toFixed(0);
                 }}
 
-                const mainChart = createChart('main-chart', commonOptions);
+                // 1. Main: 11px
+                const mainChart = createChart('main-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // VOL Chart: 數值直接顯示 (Python端已轉張)
+                // 2. VOL: 9px + 中文單位
                 const volChart = createChart('vol-chart', {{
-                    ...commonOptions, 
-                    rightPriceScale: {{ ...commonOptions.rightPriceScale, scaleMargins: {{top: 0.2, bottom: 0}} }},
-                    localization: {{ priceFormatter: (p) => formatRaw(p, 0) }}
+                    ...getOpts(tinyLayout, {{top: 0.2, bottom: 0}}),
+                    localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                const macdChart = createChart('macd-chart', commonOptions);
-                const kdjChart = createChart('kdj-chart', commonOptions);
-                const rsiChart = createChart('rsi-chart', commonOptions);
+                // 3. MACD: 11px
+                const macdChart = createChart('macd-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
                 
-                // OBV Chart: 數值直接顯示 (Python端已轉張)
+                // 4. KDJ: 11px
+                const kdjChart = createChart('kdj-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 5. RSI: 11px
+                const rsiChart = createChart('rsi-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
+                
+                // 6. OBV: 9px + 中文單位
                 const obvChart = createChart('obv-chart', {{
-                    ...commonOptions,
-                    localization: {{ priceFormatter: (p) => formatRaw(p, 2) }}
+                    ...getOpts(tinyLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    localization: {{ priceFormatter: (p) => formatBigNumber(p) }}
                 }});
                 
-                const biasChart = createChart('bias-chart', commonOptions);
+                // 7. BIAS: 11px
+                const biasChart = createChart('bias-chart', getOpts(normalLayout, {{ top: 0.1, bottom: 0.1 }}));
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
                 let rsi6Series, rsi12Series, rsi24Series;
@@ -495,7 +504,7 @@ with col_main:
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
-                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatRaw(d.value, 0)}}</span></div>`;
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">成交量</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatBigNumber(d.value)}}</span></div>`;
                         }}
                     }}
                     
@@ -506,7 +515,7 @@ with col_main:
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV</span><span class="legend-value" style="color: #FFD700">OBV: ${{formatRaw(d.obv, 2)}}</span></div>`;
+                            obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV</span><span class="legend-value" style="color: #FFD700">OBV: ${{formatBigNumber(d.obv)}}</span></div>`;
                         }}
                     }}
                     
