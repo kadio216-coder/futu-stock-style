@@ -52,7 +52,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (維持 2y)
+# 3. 資料層 (2y 資料長度，確保指標準確)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -279,7 +279,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：MACD標準化 + 副圖底色變數)
+    # 5. JavaScript (★ 核心：CSS 漸層背景 + 透明圖表)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -290,6 +290,12 @@ with col_main:
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             .chart-container {{ position: relative; width: 100%; }}
             
+            /* ★ CSS 漸層背景技巧：副圖專用 */
+            /* 左邊 calc(100% - 115px) 為灰色(#FAFAFA)，剩下的右邊為白色(#FFFFFF) */
+            .sub-chart {{
+                background: linear-gradient(to right, #FAFAFA calc(100% - 115px), #FFFFFF calc(100% - 115px));
+            }}
+
             .legend {{
                 position: absolute; top: 10px; left: 10px; z-index: 100;
                 font-size: 11px; 
@@ -310,22 +316,22 @@ with col_main:
         <div id="main-chart" class="chart-container" style="height: 450px;">
             <div id="main-legend" class="legend"></div>
         </div>
-        <div id="vol-chart" class="chart-container" style="height: {'100px' if show_vol else '0px'}; display: {'block' if show_vol else 'none'};">
+        <div id="vol-chart" class="chart-container sub-chart" style="height: {'100px' if show_vol else '0px'}; display: {'block' if show_vol else 'none'};">
             <div id="vol-legend" class="legend legend-small"></div>
         </div>
-        <div id="macd-chart" class="chart-container" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};">
+        <div id="macd-chart" class="chart-container sub-chart" style="height: {'150px' if show_macd else '0px'}; display: {'block' if show_macd else 'none'};">
             <div id="macd-legend" class="legend"></div>
         </div>
-        <div id="kdj-chart" class="chart-container" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};">
+        <div id="kdj-chart" class="chart-container sub-chart" style="height: {'120px' if show_kdj else '0px'}; display: {'block' if show_kdj else 'none'};">
             <div id="kdj-legend" class="legend"></div>
         </div>
-        <div id="rsi-chart" class="chart-container" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};">
+        <div id="rsi-chart" class="chart-container sub-chart" style="height: {'120px' if show_rsi else '0px'}; display: {'block' if show_rsi else 'none'};">
             <div id="rsi-legend" class="legend"></div>
         </div>
-        <div id="obv-chart" class="chart-container" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};">
+        <div id="obv-chart" class="chart-container sub-chart" style="height: {'120px' if show_obv else '0px'}; display: {'block' if show_obv else 'none'};">
             <div id="obv-legend" class="legend legend-small"></div>
         </div>
-        <div id="bias-chart" class="chart-container" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};">
+        <div id="bias-chart" class="chart-container sub-chart" style="height: {'120px' if show_bias else '0px'}; display: {'block' if show_bias else 'none'};">
             <div id="bias-legend" class="legend"></div>
         </div>
 
@@ -345,16 +351,13 @@ with col_main:
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
                 const FORCE_WIDTH = 115;
-                
-                // ★ 副圖底色設定 (您可以在此修改)
-                const subChartBgColor = '#FAFAFA'; // 極淡的灰色，區分副圖與主圖
 
-                // 1. 主圖字體
+                // 1. 主圖: 白色背景 (不透明)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 11 }};
-                // 2. 指標字體 (含副圖底色)
-                const indicatorLayout = {{ backgroundColor: subChartBgColor, textColor: '#333333', fontSize: 14 }};
-                // 3. VOL/OBV字體 (含副圖底色)
-                const volObvLayout = {{ backgroundColor: subChartBgColor, textColor: '#333333', fontSize: 11.5 }};
+                
+                // ★ 2. 副圖: 透明背景 (讓 CSS 漸層透出來)
+                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
+                const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
@@ -415,43 +418,36 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // 1. Main Chart
                 const mainChart = createChart('main-chart', {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatStandard(p) }} 
                 }});
                 
-                // 2. VOL Chart
                 const volChart = createChart('vol-chart', {{
                     ...getOpts(volObvLayout, {{top: 0.2, bottom: 0}}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // 3. MACD
                 const macdChart = createChart('macd-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 4. KDJ
                 const kdjChart = createChart('kdj-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 5. RSI
                 const rsiChart = createChart('rsi-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 6. OBV
                 const obvChart = createChart('obv-chart', {{
                     ...getOpts(volObvLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatBigSmart(p) }}
                 }});
                 
-                // 7. BIAS
                 const biasChart = createChart('bias-chart', {{
                     ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
@@ -554,20 +550,8 @@ with col_main:
                         }}
                     }}
                     
-                    // ★ 核心改動：MACD 回歸標準 (DIF, DEA, MACD)
-                    if (macdLegendEl && macdData.length > 0) {{ 
-                        const d = macdData.find(x => x.time === t); 
-                        if (d && d.dif!=null) {{
-                            // 標準順序: DIF (快), DEA (慢/Signal), MACD (柱/Hist)
-                            macdLegendEl.innerHTML=`<div class="legend-row">
-                                <span class="legend-label">MACD(12,26,9)</span>
-                                <span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span>
-                                <span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span>
-                                <span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span>
-                            </div>`; 
-                        }} 
-                    }}
-
+                    // ★ MACD 回歸國際標準 (DIF/DEA/MACD)
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{d.dif.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{d.dea.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{d.hist.toFixed(3)}}</span></div>`; }}
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
@@ -583,7 +567,7 @@ with col_main:
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS6: ${{d.b6!=null?d.b6.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(3):'-'}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{d.b6!=null?d.b6.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{d.b12!=null?d.b12.toFixed(3):'-'}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{d.b24!=null?d.b24.toFixed(3):'-'}}</span></div>`;
                         }}
                     }}
                 }}
