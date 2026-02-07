@@ -253,6 +253,7 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
+    # ★ V78: 資料只有 130 天
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -394,7 +395,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V96 - 移除 type:volume，使用 custom formatter)
+    # 5. JavaScript (★ 核心：V97 - 終極格式分離，font縮小)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -472,8 +473,8 @@ with col_main:
 
                 const FORCE_WIDTH = 60;
 
-                // 1. 主圖: 字體 14.5px
-                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 14.5 }};
+                // ★ V97: 主圖字體 13.5px (縮小 1px)
+                const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
@@ -513,22 +514,22 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ 格式化函數：給左上角 Legend (3位小數)
+                // ★ V96: Axis (座標軸) 專用：強制整數 (toFixed(0))
+                function formatAxis(val) {{
+                    if (val === undefined || val === null) return '-';
+                    let absVal = Math.abs(val);
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億'; 
+                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬'; 
+                    return val.toFixed(0);
+                }}
+
+                // ★ V96: Legend (查價) 專用：3位小數
                 function formatLegend(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return (val / 100000000).toFixed(3) + '億';
                     if (absVal >= 10000) return (val / 10000).toFixed(3) + '萬';
                     return val.toFixed(3);
-                }}
-
-                // ★ 格式化函數：給右側 Axis (強制整數)
-                function formatAxis(val) {{
-                    if (val === undefined || val === null) return '-';
-                    let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億';
-                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬';
-                    return val.toFixed(0);
                 }}
 
                 // 1. 主圖
@@ -538,7 +539,9 @@ with col_main:
                 }});
                 
                 // 2. VOL Chart
-                // ★ 關鍵：localization (左上) 用 formatLegend，rightPriceScale (右側) 用 formatAxis
+                // ★ V96 關鍵修正：
+                // Localization (左上): formatLegend
+                // RightPriceScale (右側): formatAxis
                 const volChart = createChart('vol-chart', {{
                     layout: volObvLayout, 
                     grid: grid, 
@@ -572,7 +575,7 @@ with col_main:
                 }});
                 
                 // 3. OBV Chart
-                // ★ 關鍵：同樣邏輯，分離顯示
+                // ★ V96 關鍵修正：
                 const obvChart = createChart('obv-chart', {{
                     layout: volObvLayout, 
                     grid: grid, 
@@ -627,8 +630,7 @@ with col_main:
                 }}
                 
                 if (volChart && volData.length > 0) {{ 
-                    // ★ V96 絕對關鍵：移除 priceFormat: {{ type: 'volume' }}
-                    // 使用 type: 'custom' 並手動指定 formatter，避免它去覆蓋 Axis 設定
+                    // ★ V96 關鍵修正：Series 使用 custom 格式，讓 Axis 保持整數
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', 
                         priceLineVisible: false,
@@ -659,7 +661,7 @@ with col_main:
                 }}
                 
                 if (obvChart && obvData.length > 0) {{ 
-                    // ★ V96 絕對關鍵：OBV 也使用 custom formatter
+                    // ★ V96 關鍵修正：OBV 也使用 custom formatter
                     obvSeries = obvChart.addLineSeries({{ 
                         ...lineOpts, color: '#FFD700', lineWidth: 1,
                         priceFormat: {{
@@ -708,7 +710,7 @@ with col_main:
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // VOL Legend (手動使用 formatLegend)
+                    // VOL Legend (使用 formatLegend = 3位小數)
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
@@ -720,7 +722,7 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // OBV Legend (手動使用 formatLegend)
+                    // OBV Legend (使用 formatLegend = 3位小數)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
@@ -741,6 +743,7 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
+                    // ★強制鎖定 60px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
