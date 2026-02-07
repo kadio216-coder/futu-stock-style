@@ -78,7 +78,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層 (V78架構 + MA120)
+# 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -176,6 +176,7 @@ def check_4_strategies(df):
     
     results = {}
     
+    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -194,6 +195,7 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
+    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -204,6 +206,7 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
+    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -215,6 +218,7 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
+    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -390,7 +394,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V98 全面整數化 Axis)
+    # 5. JavaScript (★ 核心：V99 終極數學取整 - 物理消除小數點)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -400,6 +404,7 @@ with col_main:
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
             
+            /* 60px 寬度 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 background-image: linear-gradient(to right, #FAFAFA calc(100% - 60px), transparent calc(100% - 60px));
@@ -468,7 +473,7 @@ with col_main:
 
                 const FORCE_WIDTH = 60;
 
-                // 1. 主圖: 字體 13.5px (V97)
+                // 1. 主圖: 字體 13.5px
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
@@ -509,22 +514,22 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ Axis 專用：強制整數 (主圖/MACD/KDJ/RSI/BIAS 用)
-                function formatIntegerAxis(val) {{
+                // ★ V99 Axis專用: 物理取整 Math.round (For Main/MACD/KDJ...)
+                function axisFormatInt(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toFixed(0);
+                    return Math.round(val).toString(); // 強制轉整數
                 }}
 
-                // ★ Axis 專用：強制整數 + 萬/億 (VOL/OBV 用)
-                function formatIntegerBigAxis(val) {{
+                // ★ V99 Axis專用: 大數物理取整 (For VOL/OBV)
+                function axisFormatBigInt(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億'; 
-                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬'; 
-                    return val.toFixed(0);
+                    if (absVal >= 100000000) return Math.round(val / 100000000).toString() + '億'; 
+                    if (absVal >= 10000) return Math.round(val / 10000).toString() + '萬'; 
+                    return Math.round(val).toString(); // 不可能有小數點
                 }}
 
-                // ★ Legend 專用：小數 + 萬/億 (VOL/OBV 用)
+                // ★ V99 Legend專用: 3位小數 + 萬/億 (For VOL/OBV)
                 function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
@@ -533,40 +538,36 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // 1. 主圖
+                // 1. 主圖 (Axis = axisFormatInt)
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }}, // Legend 2位小數
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}, 
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => p.toFixed(0) // Axis 整數
+                        tickMarkFormatter: (p) => axisFormatInt(p) // 強制整數
                     }}
                 }});
                 
-                // 2. VOL Chart
+                // 2. VOL Chart (Axis = axisFormatBigInt)
                 const volChart = createChart('vol-chart', {{
                     layout: volObvLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    
-                    // Axis: 整數 + 萬
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
-                        tickMarkFormatter: (p) => formatIntegerBigAxis(p)
+                        tickMarkFormatter: (p) => axisFormatBigInt(p) // 強制整數 + 萬
                     }},
-                    
-                    // Legend: 3位小數 + 萬
-                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }}
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }} // Legend 保留小數
                 }});
                 
-                // ★ 3. MACD/KDJ/RSI/BIAS (全部 Axis 整數)
+                // 3. 副圖們 (Axis = axisFormatInt)
                 const macdChart = createChart('macd-chart', {{
                     layout: indicatorLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => p.toFixed(0)
+                        tickMarkFormatter: (p) => axisFormatInt(p)
                     }},
-                    localization: {{ priceFormatter: (p) => formatSmart(p) }} // Legend 保留小數
+                    localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
                 const kdjChart = createChart('kdj-chart', {{
@@ -574,7 +575,7 @@ with col_main:
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => p.toFixed(0)
+                        tickMarkFormatter: (p) => axisFormatInt(p)
                     }},
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
@@ -584,7 +585,7 @@ with col_main:
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => p.toFixed(0)
+                        tickMarkFormatter: (p) => axisFormatInt(p)
                     }},
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
@@ -594,24 +595,20 @@ with col_main:
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => p.toFixed(0)
+                        tickMarkFormatter: (p) => axisFormatInt(p)
                     }},
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
-                // 4. OBV Chart
+                // 4. OBV Chart (Axis = axisFormatBigInt)
                 const obvChart = createChart('obv-chart', {{
                     layout: volObvLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    
-                    // Axis: 整數 + 萬
                     rightPriceScale: {{ 
                         borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => formatIntegerBigAxis(p)
+                        tickMarkFormatter: (p) => axisFormatBigInt(p) // 強制整數 + 萬
                     }},
-                    
-                    // Legend: 3位小數 + 萬
-                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }}
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }} // Legend 保留小數
                 }});
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -648,13 +645,13 @@ with col_main:
                 }}
                 
                 if (volChart && volData.length > 0) {{ 
-                    // ★ V98: 絕對關鍵修正 -> 移除 type: 'volume'，改用 custom
+                    // ★ 使用 custom formatter, 傳入 formatBigFixed3 顯示小數點
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', 
                         priceLineVisible: false,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
+                            formatter: (p) => formatBigFixed3(p) 
                         }}
                     }});
                     volSeries.setData(volData); 
@@ -679,19 +676,19 @@ with col_main:
                 }}
                 
                 if (obvChart && obvData.length > 0) {{ 
-                    // ★ V98: 絕對關鍵修正 -> 使用 custom
+                    // ★ 使用 custom formatter
                     obvSeries = obvChart.addLineSeries({{ 
                         ...lineOpts, color: '#FFD700', lineWidth: 1,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
+                            formatter: (p) => formatBigFixed3(p)
                         }}
                     }});
                     obvMaSeries = obvChart.addLineSeries({{ 
                         ...lineOpts, color: '#29B6F6', lineWidth: 1,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
+                            formatter: (p) => formatBigFixed3(p)
                         }}
                     }});
                     obvSeries.setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
@@ -758,7 +755,6 @@ with col_main:
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 allCharts.forEach(c => {{
-                    // ★強制鎖定 60px
                     c.priceScale('right').applyOptions({{ minimumWidth: FORCE_WIDTH }});
                     c.subscribeCrosshairMove(updateLegends);
                     c.timeScale().subscribeVisibleLogicalRangeChange(range => {{
