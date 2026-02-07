@@ -78,7 +78,7 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層
+# 3. 資料層 (V78架構 + MA120)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="2y", interval="1d"):
@@ -176,7 +176,6 @@ def check_4_strategies(df):
     
     results = {}
     
-    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -195,7 +194,6 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
-    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -206,7 +204,6 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
-    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -218,7 +215,6 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
-    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -253,7 +249,6 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    # ★ V78: 資料只有 130 天
     full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
     
     if full_df is None:
@@ -395,7 +390,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V97 - 終極格式分離，font縮小)
+    # 5. JavaScript (★ 核心：V98 全面整數化 Axis)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -473,7 +468,7 @@ with col_main:
 
                 const FORCE_WIDTH = 60;
 
-                // ★ V97: 主圖字體 13.5px (縮小 1px)
+                // 1. 主圖: 字體 13.5px (V97)
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
                 // 2. 副圖: 透明, 字體 14/11.5
@@ -514,8 +509,14 @@ with col_main:
                     return parseFloat(val.toFixed(3)).toString();
                 }}
 
-                // ★ V96: Axis (座標軸) 專用：強制整數 (toFixed(0))
-                function formatAxis(val) {{
+                // ★ Axis 專用：強制整數 (主圖/MACD/KDJ/RSI/BIAS 用)
+                function formatIntegerAxis(val) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toFixed(0);
+                }}
+
+                // ★ Axis 專用：強制整數 + 萬/億 (VOL/OBV 用)
+                function formatIntegerBigAxis(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億'; 
@@ -523,8 +524,8 @@ with col_main:
                     return val.toFixed(0);
                 }}
 
-                // ★ V96: Legend (查價) 專用：3位小數
-                function formatLegend(val) {{
+                // ★ Legend 專用：小數 + 萬/億 (VOL/OBV 用)
+                function formatBigFixed3(val) {{
                     if (val === undefined || val === null) return '-';
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return (val / 100000000).toFixed(3) + '億';
@@ -535,67 +536,82 @@ with col_main:
                 // 1. 主圖
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatStandard(p) }} 
+                    localization: {{ priceFormatter: (p) => formatStandard(p) }}, // Legend 2位小數
+                    rightPriceScale: {{ 
+                        visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
+                        tickMarkFormatter: (p) => p.toFixed(0) // Axis 整數
+                    }}
                 }});
                 
                 // 2. VOL Chart
-                // ★ V96 關鍵修正：
-                // Localization (左上): formatLegend
-                // RightPriceScale (右側): formatAxis
                 const volChart = createChart('vol-chart', {{
-                    layout: volObvLayout, 
-                    grid: grid, 
-                    crosshair: crosshair,
+                    layout: volObvLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                     
-                    // 右側座標軸 -> 強制整數
+                    // Axis: 整數 + 萬
                     rightPriceScale: {{ 
-                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, 
-                        scaleMargins: {{top: 0.2, bottom: 0}},
-                        tickMarkFormatter: (p) => formatAxis(p)
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
+                        tickMarkFormatter: (p) => formatIntegerBigAxis(p)
                     }},
                     
-                    // 左上角 Legend -> 保留小數
-                    localization: {{ priceFormatter: (p) => formatLegend(p) }}
+                    // Legend: 3位小數 + 萬
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }}
                 }});
                 
+                // ★ 3. MACD/KDJ/RSI/BIAS (全部 Axis 整數)
                 const macdChart = createChart('macd-chart', {{
-                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatSmart(p) }}
+                    layout: indicatorLayout, grid: grid, crosshair: crosshair,
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => p.toFixed(0)
+                    }},
+                    localization: {{ priceFormatter: (p) => formatSmart(p) }} // Legend 保留小數
                 }});
                 
                 const kdjChart = createChart('kdj-chart', {{
-                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    layout: indicatorLayout, grid: grid, crosshair: crosshair,
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => p.toFixed(0)
+                    }},
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
                 const rsiChart = createChart('rsi-chart', {{
-                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => formatSmart(p) }}
-                }});
-                
-                // 3. OBV Chart
-                // ★ V96 關鍵修正：
-                const obvChart = createChart('obv-chart', {{
-                    layout: volObvLayout, 
-                    grid: grid, 
-                    crosshair: crosshair,
+                    layout: indicatorLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    
-                    // 右側座標軸 -> 強制整數
                     rightPriceScale: {{ 
-                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, 
-                        scaleMargins: {{top: 0.1, bottom: 0.1}},
-                        tickMarkFormatter: (p) => formatAxis(p)
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => p.toFixed(0)
                     }},
-                    
-                    // 左上角 Legend -> 保留小數
-                    localization: {{ priceFormatter: (p) => formatLegend(p) }}
+                    localization: {{ priceFormatter: (p) => formatSmart(p) }}
                 }});
                 
                 const biasChart = createChart('bias-chart', {{
-                    ...getOpts(indicatorLayout, {{ top: 0.1, bottom: 0.1 }}),
+                    layout: indicatorLayout, grid: grid, crosshair: crosshair,
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => p.toFixed(0)
+                    }},
                     localization: {{ priceFormatter: (p) => formatSmart(p) }}
+                }});
+                
+                // 4. OBV Chart
+                const obvChart = createChart('obv-chart', {{
+                    layout: volObvLayout, grid: grid, crosshair: crosshair,
+                    timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                    
+                    // Axis: 整數 + 萬
+                    rightPriceScale: {{ 
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => formatIntegerBigAxis(p)
+                    }},
+                    
+                    // Legend: 3位小數 + 萬
+                    localization: {{ priceFormatter: (p) => formatBigFixed3(p) }}
                 }});
 
                 let volSeries, bollMidSeries, bollUpSeries, bollLowSeries, ma5Series, ma10Series, ma20Series, ma60Series;
@@ -611,6 +627,7 @@ with col_main:
                     }});
                     candleSeries.setData(candlesData);
 
+                    // MA (底層)
                     if (maData.length > 0) {{
                         const f = maData[0];
                         if (f.ma5 !== undefined) {{ ma5Series = mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)' }}); ma5Series.setData(maData.map(d => ({{ time: d.time, value: d.ma5 }}))); }}
@@ -619,6 +636,7 @@ with col_main:
                         if (f.ma60 !== undefined) {{ ma60Series = mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)' }}); ma60Series.setData(maData.map(d => ({{ time: d.time, value: d.ma60 }}))); }}
                     }}
 
+                    // BOLL (上層)
                     if (bollData.length > 0) {{
                         bollMidSeries = mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID' }}); 
                         bollUpSeries = mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UPPER' }});
@@ -630,13 +648,13 @@ with col_main:
                 }}
                 
                 if (volChart && volData.length > 0) {{ 
-                    // ★ V96 關鍵修正：Series 使用 custom 格式，讓 Axis 保持整數
+                    // ★ V98: 絕對關鍵修正 -> 移除 type: 'volume'，改用 custom
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', 
                         priceLineVisible: false,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatLegend(p) // Series 本身用詳細格式
+                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
                         }}
                     }});
                     volSeries.setData(volData); 
@@ -661,19 +679,19 @@ with col_main:
                 }}
                 
                 if (obvChart && obvData.length > 0) {{ 
-                    // ★ V96 關鍵修正：OBV 也使用 custom formatter
+                    // ★ V98: 絕對關鍵修正 -> 使用 custom
                     obvSeries = obvChart.addLineSeries({{ 
                         ...lineOpts, color: '#FFD700', lineWidth: 1,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatLegend(p)
+                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
                         }}
                     }});
                     obvMaSeries = obvChart.addLineSeries({{ 
                         ...lineOpts, color: '#29B6F6', lineWidth: 1,
                         priceFormat: {{
                             type: 'custom',
-                            formatter: (p) => formatLegend(p)
+                            formatter: (p) => formatBigFixed3(p) // Series (Legend) 用小數
                         }}
                     }});
                     obvSeries.setData(obvData.map(d => ({{ time: d.time, value: d.obv }}))); 
@@ -706,15 +724,13 @@ with col_main:
                         t = param.time;
                     }}
 
-                    // 主圖 Legend
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{d.ma5.toFixed(3)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{d.ma10.toFixed(3)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{d.ma20.toFixed(3)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{d.ma60.toFixed(3)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{d.mid.toFixed(3)}}</span><span class="legend-value" style="color:#FFD700">UP:${{d.up!=null?d.up.toFixed(3):'-'}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{d.low!=null?d.low.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // VOL Legend (使用 formatLegend = 3位小數)
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
-                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatLegend(d.value)}}</span></div>`;
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatBigFixed3(d.value)}}</span></div>`;
                         }}
                     }}
                     
@@ -722,12 +738,11 @@ with col_main:
                     if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{d.k.toFixed(3)}}</span><span class="legend-value" style="color:#2196F3">D: ${{d.d.toFixed(3)}}</span><span class="legend-value" style="color:#E040FB">J: ${{d.j.toFixed(3)}}</span></div>`; }}
                     if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{d.rsi6!=null?d.rsi6.toFixed(3):'-'}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{d.rsi12!=null?d.rsi12.toFixed(3):'-'}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{d.rsi24!=null?d.rsi24.toFixed(3):'-'}}</span></div>`; }}
                     
-                    // OBV Legend (使用 formatLegend = 3位小數)
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            const obvVal = formatLegend(d.obv);
-                            const maVal = d.obv_ma ? formatLegend(d.obv_ma) : '-';
+                            const obvVal = formatBigFixed3(d.obv);
+                            const maVal = d.obv_ma ? formatBigFixed3(d.obv_ma) : '-';
                             obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{obvVal}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{maVal}}</span></div>`;
                         }}
                     }}
