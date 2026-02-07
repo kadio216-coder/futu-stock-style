@@ -176,7 +176,6 @@ def check_4_strategies(df):
     
     results = {}
     
-    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -195,7 +194,6 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
-    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -206,7 +204,6 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
-    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -218,7 +215,6 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
-    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -394,7 +390,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V101 - 變數順序修復 + 終極整數化)
+    # 5. JavaScript (★ 核心：V100 終極修正 - 完全手動控制 PriceScale)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -470,19 +466,13 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
-                // ★ 定義變數 (移到最上方)
                 const FORCE_WIDTH = 60;
                 
-                // ★ lineOpts 必須在此定義，才能被下面的 createSubChart 使用
+                // 1. 定義共用樣式變數 (移到最上方防止報錯)
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
-
-                // 1. 主圖: 字體 13.5px
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
-                
-                // 2. 副圖: 透明, 字體 14/11.5
                 const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
-
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
 
@@ -491,148 +481,164 @@ with col_main:
                         layout: layout,
                         grid: grid,
                         rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', 
-                            visible: true,
-                            minimumWidth: FORCE_WIDTH, 
-                            scaleMargins: scaleMargins
+                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: scaleMargins
                         }},
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         crosshair: crosshair,
                     }};
                 }}
 
-                // ★ FORMATTERS
-                function fmtInt(val) {{ return Math.round(val).toString(); }}
-                function fmtBigInt(val) {{
-                    let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return Math.round(val/100000000).toString() + '億';
-                    if (absVal >= 10000) return Math.round(val/10000).toString() + '萬';
-                    return Math.round(val).toString();
-                }}
-                function fmtStandard(val) {{
+                // ★ V100: 定義兩套獨立的 formatter
+                // 1. 給 Legend 用的 (3位小數)
+                function formatLegend(val) {{
                     if (val === undefined || val === null) return '-';
-                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
-                }}
-                function fmtDec3(val) {{ return val.toFixed(3); }}
-                function fmtBigDec3(val) {{
                     let absVal = Math.abs(val);
-                    if (absVal >= 100000000) return (val/100000000).toFixed(3) + '億';
-                    if (absVal >= 10000) return (val/10000).toFixed(3) + '萬';
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(3) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(3) + '萬';
                     return val.toFixed(3);
                 }}
 
-                // 1. 主圖
+                // 2. 給 Axis 用的 (強制整數 toFixed(0))
+                function formatAxis(val) {{
+                    if (val === undefined || val === null) return '-';
+                    let absVal = Math.abs(val);
+                    if (absVal >= 100000000) return (val / 100000000).toFixed(0) + '億';
+                    if (absVal >= 10000) return (val / 10000).toFixed(0) + '萬';
+                    return val.toFixed(0);
+                }}
+                
+                function formatInt(val) {{ return Math.round(val).toString(); }}
+                function formatDec3(val) {{ return val.toFixed(3); }}
+
+                // ==========================================
+                // 1. 主圖 Main
+                // ==========================================
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    localization: {{ priceFormatter: (p) => fmtStandard(p) }}, 
-                    rightPriceScale: {{ 
+                    localization: {{ priceFormatter: (p) => p.toFixed(2) }},
+                    rightPriceScale: {{
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => fmtInt(p)
+                        tickMarkFormatter: (p) => p.toFixed(0) // Axis 整數
                     }}
                 }});
                 
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746',
-                    priceFormat: {{ type: 'custom', formatter: (p) => fmtStandard(p) }}
+                    priceFormat: {{ type: 'custom', formatter: (p) => p.toFixed(2) }}
                 }});
                 candleSeries.setData(candlesData);
 
                 if (maData.length > 0) {{
-                    if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
-                    if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
-                    if (maData[0].ma20 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', title: 'MA(20)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma20}}))); }}
-                    if (maData[0].ma60 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma60}}))); }}
+                    if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
+                    if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
+                    if (maData[0].ma20 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma20}}))); }}
+                    if (maData[0].ma60 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma60}}))); }}
                 }}
                 
                 if (bollData.length > 0) {{
-                    mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.mid}})));
-                    mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UP', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.up}})));
-                    mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOW', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
+                    mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(bollData.map(d=>({{time:d.time, value:d.mid}})));
+                    mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(bollData.map(d=>({{time:d.time, value:d.up}})));
+                    mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
                 }}
 
-                // 2. VOL Chart
+                // ==========================================
+                // 2. VOL Chart (V100修正: 完全手動控制)
+                // ==========================================
                 const volChartEl = document.getElementById('vol-chart');
                 let volChart = null, volSeries = null;
                 if (volChartEl.style.display !== 'none') {{
                     volChart = LightweightCharts.createChart(volChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
-                            tickMarkFormatter: (p) => fmtBigInt(p)
-                        }}
+                        // ★ 這裡不設 localization，完全交給下面的 applyOptions
                     }});
                     
+                    // ★ 1. 設定 Series 格式 (Legend 3位小數)
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', priceLineVisible: false,
-                        priceFormat: {{ type: 'custom', formatter: (p) => fmtBigDec3(p) }}
+                        priceFormat: {{ type: 'custom', formatter: (p) => formatLegend(p) }}
                     }});
                     volSeries.setData(volData);
+                    
+                    // ★ 2. 強制設定 Axis 格式 (整數)
+                    volChart.priceScale('right').applyOptions({{
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, 
+                        scaleMargins: {{top: 0.2, bottom: 0}},
+                        tickMarkFormatter: (p) => formatAxis(p)
+                    }});
                 }}
 
-                // 3. Helper for SubCharts
+                // ==========================================
+                // 3. 副圖們 (MACD/KDJ/RSI/BIAS)
+                // ==========================================
                 function createSubChart(id) {{
                     const el = document.getElementById(id);
                     if (el.style.display === 'none') return null;
-                    return LightweightCharts.createChart(el, {{
+                    const chart = LightweightCharts.createChart(el, {{
                         layout: indicatorLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtInt(p)
-                        }}
                     }});
+                    // 強制設定 Axis 為整數
+                    chart.priceScale('right').applyOptions({{
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => Math.round(p).toString()
+                    }});
+                    return chart;
                 }}
 
                 const macdChart = createSubChart('macd-chart');
                 if (macdChart && macdData.length > 0) {{
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.dif}})));
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.dea}})));
-                    macdChart.addHistogramSeries({{ priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color}})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(macdData.map(d=>({{time:d.time, value:d.dif}})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(macdData.map(d=>({{time:d.time, value:d.dea}})));
+                    macdChart.addHistogramSeries({{ priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color}})));
                 }}
 
                 const kdjChart = createSubChart('kdj-chart');
                 if (kdjChart && kdjData.length > 0) {{
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.k}})));
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.d}})));
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.j}})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(kdjData.map(d=>({{time:d.time, value:d.k}})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(kdjData.map(d=>({{time:d.time, value:d.d}})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(kdjData.map(d=>({{time:d.time, value:d.j}})));
                 }}
 
                 const rsiChart = createSubChart('rsi-chart');
                 if (rsiChart && rsiData.length > 0) {{
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6}})));
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12}})));
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24}})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6}})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12}})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24}})));
                 }}
 
                 const biasChart = createSubChart('bias-chart');
                 if (biasChart && biasData.length > 0) {{
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b6}})));
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b12}})));
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(biasData.map(d=>({{time:d.time, value:d.b6}})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(biasData.map(d=>({{time:d.time, value:d.b12}})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{ type: 'custom', formatter: formatDec3 }} }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
                 }}
 
-                // 4. OBV Chart
+                // ==========================================
+                // 4. OBV Chart (V100修正: 完全手動控制)
+                // ==========================================
                 const obvChartEl = document.getElementById('obv-chart');
                 let obvChart = null;
                 if (obvChartEl.style.display !== 'none') {{
                     obvChart = LightweightCharts.createChart(obvChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtBigInt(p)
-                        }}
                     }});
                     
+                    // ★ 1. 設定 Series 格式 (Legend 3位小數)
                     if (obvData.length > 0) {{
-                        const s1 = obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', priceFormat: {{type:'custom', formatter: (p)=>fmtBigDec3(p)}} }});
-                        s1.setData(obvData.map(d=>({{time:d.time, value:d.obv}})));
-                        const s2 = obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6', priceFormat: {{type:'custom', formatter: (p)=>fmtBigDec3(p)}} }});
-                        s2.setData(obvData.map(d=>({{time:d.time, value:d.obv_ma}})));
+                        obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', priceFormat: {{ type: 'custom', formatter: (p) => formatLegend(p) }} }}).setData(obvData.map(d=>({{time:d.time, value:d.obv}})));
+                        obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6', priceFormat: {{ type: 'custom', formatter: (p) => formatLegend(p) }} }}).setData(obvData.map(d=>({{time:d.time, value:d.obv_ma}})));
                     }}
+                    
+                    // ★ 2. 強制設定 Axis 格式 (整數)
+                    obvChart.priceScale('right').applyOptions({{
+                        borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
+                        tickMarkFormatter: (p) => formatAxis(p)
+                    }});
                 }}
 
+                // Sync & Resize
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
                 function updateLegends(param) {{
@@ -643,31 +649,31 @@ with col_main:
                     }} else {{ t = param.time; }}
 
                     const mainLegendEl = document.getElementById('main-legend');
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{fmtDec3(d.ma5)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{fmtDec3(d.ma10)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{fmtDec3(d.ma20)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{fmtDec3(d.ma60)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{fmtDec3(d.mid)}}</span><span class="legend-value" style="color:#FFD700">UP:${{fmtDec3(d.up)}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{fmtDec3(d.low)}}</span></div>`; }}
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{formatDec3(d.ma5)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{formatDec3(d.ma10)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{formatDec3(d.ma20)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{formatDec3(d.ma60)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{formatDec3(d.mid)}}</span><span class="legend-value" style="color:#FFD700">UP:${{formatDec3(d.up)}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{formatDec3(d.low)}}</span></div>`; }}
                     
                     const volLegendEl = document.getElementById('vol-legend');
                     if (volLegendEl && volData.length > 0) {{
                         const d = volData.find(x => x.time === t);
                         if (d && d.value != null) {{
-                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{fmtBigDec3(d.value)}}</span></div>`;
+                            volLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">VOL</span><span class="legend-value" style="color: ${{d.color}}">VOL: ${{formatLegend(d.value)}}</span></div>`;
                         }}
                     }}
                     
                     const macdLegendEl = document.getElementById('macd-legend');
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{fmtDec3(d.dif)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{fmtDec3(d.dea)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{fmtDec3(d.hist)}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{formatDec3(d.dif)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{formatDec3(d.dea)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{formatDec3(d.hist)}}</span></div>`; }}
                     
                     const kdjLegendEl = document.getElementById('kdj-legend');
-                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{fmtDec3(d.k)}}</span><span class="legend-value" style="color:#2196F3">D: ${{fmtDec3(d.d)}}</span><span class="legend-value" style="color:#E040FB">J: ${{fmtDec3(d.j)}}</span></div>`; }}
+                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{formatDec3(d.k)}}</span><span class="legend-value" style="color:#2196F3">D: ${{formatDec3(d.d)}}</span><span class="legend-value" style="color:#E040FB">J: ${{formatDec3(d.j)}}</span></div>`; }}
                     
                     const rsiLegendEl = document.getElementById('rsi-legend');
-                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{fmtDec3(d.rsi6)}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{fmtDec3(d.rsi12)}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{fmtDec3(d.rsi24)}}</span></div>`; }}
+                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{formatDec3(d.rsi6)}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{formatDec3(d.rsi12)}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{formatDec3(d.rsi24)}}</span></div>`; }}
                     
                     const obvLegendEl = document.getElementById('obv-legend');
                     if (obvLegendEl && obvData.length > 0) {{
                         const d = obvData.find(x => x.time === t);
                         if (d && d.obv != null) {{
-                            obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{fmtBigDec3(d.obv)}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{fmtBigDec3(d.obv_ma)}}</span></div>`;
+                            obvLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">OBV(10)</span><span class="legend-value" style="color: #FFD700">OBV: ${{formatLegend(d.obv)}}</span> <span class="legend-value" style="color: #29B6F6">MA10: ${{formatLegend(d.obv_ma)}}</span></div>`;
                         }}
                     }}
                     
@@ -675,7 +681,7 @@ with col_main:
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{fmtDec3(d.b6)}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{fmtDec3(d.b12)}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{fmtDec3(d.b24)}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{formatDec3(d.b6)}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{formatDec3(d.b12)}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{formatDec3(d.b24)}}</span></div>`;
                         }}
                     }}
                 }}
@@ -710,7 +716,7 @@ with col_main:
     if show_obv: total_height += 120
     if show_bias: total_height += 120
     
-    # ★ 緩衝高度
+    # ★ 緩衝高度 (V78)
     total_height += 50
 
     components.html(html_code, height=total_height)
