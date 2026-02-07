@@ -176,7 +176,6 @@ def check_4_strategies(df):
     
     results = {}
     
-    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -195,7 +194,6 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
-    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -206,7 +204,6 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
-    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -218,7 +215,6 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
-    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -394,7 +390,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V106 - Axis 整數 / Cursor 小數 徹底分離)
+    # 5. JavaScript (★ 核心：V107 - 嚴格遵守規格)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -491,47 +487,51 @@ with col_main:
                     }};
                 }}
 
-                // ★ FORMATTERS
+                // ★ FORMATTERS (定義工具函數)
                 
-                // Axis Formatter (座標軸)
-                function fmtAxisInt(val) {{ return Math.round(val).toString(); }} // 整數 (副圖)
-                function fmtAxisDec2(val) {{ return val.toFixed(2); }} // 2位小數 (主圖)
-                function fmtAxisBigInt(val) {{ // 大數整數 (VOL/OBV)
+                // Axis Formatter (座標軸) -> 【全部強制整數】
+                function fmtInt(val) {{ return Math.round(val).toString(); }}
+                
+                // Big Axis Formatter (大數整數) -> 【強制整數】
+                function fmtBigInt(val) {{
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return Math.round(val/100000000).toString() + '億';
                     if (absVal >= 10000) return Math.round(val/10000).toString() + '萬';
                     return Math.round(val).toString();
                 }}
 
-                // Series/Legend Formatter (游標 & Legend)
-                function fmtDec2(val) {{ return val.toFixed(2); }} // 主圖/MA
-                function fmtDec3(val) {{ return val.toFixed(3); }} // 副圖
-                function fmtBigDec3(val) {{ // VOL/OBV
+                // Series/Cursor Formatter (游標顯示)
+                function fmtDec2(val) {{ return val.toFixed(2); }} // 主圖/MA (2位)
+                function fmtDec3(val) {{ return val.toFixed(3); }} // 副圖 (3位)
+                function fmtBigDec3(val) {{ // VOL/OBV (3位)
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return (val/100000000).toFixed(3) + '億';
                     if (absVal >= 10000) return (val/10000).toFixed(3) + '萬';
                     return val.toFixed(3);
                 }}
 
+                // Legend Formatter (左上角)
+                function fmtLegendDec3(val) {{ return val.toFixed(3); }} // 主圖 Legend (3位)
+
                 // ==========================================
-                // 1. 主圖 Main
-                // 需求: Axis 2位小數 (1124.00), Cursor 2位小數
+                // 1. 主圖 Main (Axis: 整數, Cursor: 2位, Legend: 3位)
                 // ==========================================
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => fmtAxisDec2(p) // ★ 座標軸: 2位小數
+                        tickMarkFormatter: (p) => fmtInt(p) // ★ Axis: 整數 (1124)
                     }}
                 }});
                 
-                // ★ Cursor: 2位小數
+                // ★ Cursor: 2位小數 (1124.12)
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746',
                     priceFormat: {{ type: 'custom', formatter: (p) => fmtDec2(p) }} 
                 }});
                 candleSeries.setData(candlesData);
 
+                // MA/BOLL Cursor 設定 (2位小數)
                 if (maData.length > 0) {{
                     if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)', priceFormat: {{ type: 'custom', formatter: fmtDec2 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
                     if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)', priceFormat: {{ type: 'custom', formatter: fmtDec2 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
@@ -545,13 +545,13 @@ with col_main:
                     mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOW', priceFormat: {{ type: 'custom', formatter: fmtDec2 }} }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
                 }}
                 
-                // ★ Force Apply Main Axis (Just in case)
-                mainChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisDec2(p) }});
-
+                // ★ V107 關鍵：主圖 Axis 強制覆蓋為整數
+                mainChart.priceScale('right').applyOptions({{
+                    tickMarkFormatter: (p) => fmtInt(p)
+                }});
 
                 // ==========================================
-                // 2. VOL Chart
-                // 需求: Axis 整數 (8000萬), Cursor 3位小數 (8000.123萬)
+                // 2. VOL Chart (Axis: 整數, Cursor: 3位小數)
                 // ==========================================
                 const volChartEl = document.getElementById('vol-chart');
                 let volChart = null, volSeries = null;
@@ -561,8 +561,7 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
-                            // Initial setting
-                            tickMarkFormatter: (p) => fmtAxisBigInt(p)
+                            tickMarkFormatter: (p) => fmtBigInt(p) // ★ 座標軸: 8000萬
                         }}
                     }});
                     
@@ -572,8 +571,8 @@ with col_main:
                     }});
                     volSeries.setData(volData);
                     
-                    // ★ V106 關鍵：暴力覆蓋，確保 Axis 還是整數
-                    volChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisBigInt(p) }});
+                    // ★ 強制覆蓋 Axis
+                    volChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtBigInt(p) }});
                 }}
 
                 // ==========================================
@@ -587,7 +586,7 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtAxisInt(p) // ★ 座標軸: 整數
+                            tickMarkFormatter: (p) => fmtInt(p) // ★ 座標軸: 整數
                         }}
                     }});
                     return chart;
@@ -595,11 +594,11 @@ with col_main:
 
                 const macdChart = createSubChart('macd-chart');
                 if (macdChart && macdData.length > 0) {{
+                    // ★ 游標: 3位小數
                     macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.dif}})));
                     macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.dea}})));
                     macdChart.addHistogramSeries({{ priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color}})));
-                    // Force apply axis
-                    macdChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisInt(p) }});
+                    macdChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtInt(p) }});
                 }}
 
                 const kdjChart = createSubChart('kdj-chart');
@@ -607,7 +606,7 @@ with col_main:
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.k}})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.d}})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(kdjData.map(d=>({{time:d.time, value:d.j}})));
-                    kdjChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisInt(p) }});
+                    kdjChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtInt(p) }});
                 }}
 
                 const rsiChart = createSubChart('rsi-chart');
@@ -615,7 +614,7 @@ with col_main:
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6}})));
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12}})));
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24}})));
-                    rsiChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisInt(p) }});
+                    rsiChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtInt(p) }});
                 }}
 
                 const biasChart = createSubChart('bias-chart');
@@ -623,11 +622,11 @@ with col_main:
                     biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b6}})));
                     biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b12}})));
                     biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
-                    biasChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisInt(p) }});
+                    biasChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtInt(p) }});
                 }}
 
                 // ==========================================
-                // 4. OBV Chart
+                // 4. OBV Chart (Axis: 整數, Cursor: 3位小數)
                 // ==========================================
                 const obvChartEl = document.getElementById('obv-chart');
                 let obvChart = null;
@@ -637,25 +636,23 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtAxisBigInt(p)
+                            tickMarkFormatter: (p) => fmtBigInt(p) // ★ 座標軸: 50萬
                         }}
                     }});
                     
                     if (obvData.length > 0) {{
+                        // ★ 游標: 3位小數
                         const s1 = obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', priceFormat: {{type:'custom', formatter: (p)=>fmtBigDec3(p)}} }});
                         s1.setData(obvData.map(d=>({{time:d.time, value:d.obv}})));
                         const s2 = obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6', priceFormat: {{type:'custom', formatter: (p)=>fmtBigDec3(p)}} }});
                         s2.setData(obvData.map(d=>({{time:d.time, value:d.obv_ma}})));
                     }}
-                    // Force Override Axis
-                    obvChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtAxisBigInt(p) }});
+                    // ★ 強制覆蓋 Axis
+                    obvChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtBigInt(p) }});
                 }}
 
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
-                // Legend 顯示邏輯 (與游標一致)
-                // 主圖: 3位小數 (Legend 要求 3位, 雖然 Cursor 2位)
-                // 注意: 這裡 Legend 按照您最早要求 V78 邏輯，是 3位小數
                 function updateLegends(param) {{
                     let t;
                     if (!param || !param.time) {{
@@ -663,10 +660,10 @@ with col_main:
                         else return;
                     }} else {{ t = param.time; }}
 
-                    // 主圖 Legend: 3位小數 (fmtDec3)
+                    // ★ Legend: 使用 3位小數 (fmtLegendDec3)
                     const mainLegendEl = document.getElementById('main-legend');
-                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{fmtDec3(d.ma5)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{fmtDec3(d.ma10)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{fmtDec3(d.ma20)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{fmtDec3(d.ma60)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
-                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{fmtDec3(d.mid)}}</span><span class="legend-value" style="color:#FFD700">UP:${{fmtDec3(d.up)}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{fmtDec3(d.low)}}</span></div>`; }}
+                    if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{fmtLegendDec3(d.ma5)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{fmtLegendDec3(d.ma10)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{fmtLegendDec3(d.ma20)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{fmtLegendDec3(d.ma60)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
+                    if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{fmtLegendDec3(d.mid)}}</span><span class="legend-value" style="color:#FFD700">UP:${{fmtLegendDec3(d.up)}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{fmtLegendDec3(d.low)}}</span></div>`; }}
                     
                     const volLegendEl = document.getElementById('vol-legend');
                     if (volLegendEl && volData.length > 0) {{
@@ -677,13 +674,13 @@ with col_main:
                     }}
                     
                     const macdLegendEl = document.getElementById('macd-legend');
-                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{fmtDec3(d.dif)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{fmtDec3(d.dea)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{fmtDec3(d.hist)}}</span></div>`; }}
+                    if (macdLegendEl && macdData.length > 0) {{ const d = macdData.find(x => x.time === t); if(d && d.dif!=null) macdLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">MACD(12,26,9)</span><span class="legend-value" style="color:#E6A23C">DIF: ${{fmtLegendDec3(d.dif)}}</span><span class="legend-value" style="color:#2196F3">DEA: ${{fmtLegendDec3(d.dea)}}</span><span class="legend-value" style="color:#E040FB">MACD: ${{fmtLegendDec3(d.hist)}}</span></div>`; }}
                     
                     const kdjLegendEl = document.getElementById('kdj-legend');
-                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{fmtDec3(d.k)}}</span><span class="legend-value" style="color:#2196F3">D: ${{fmtDec3(d.d)}}</span><span class="legend-value" style="color:#E040FB">J: ${{fmtDec3(d.j)}}</span></div>`; }}
+                    if (kdjLegendEl && kdjData.length > 0) {{ const d = kdjData.find(x => x.time === t); if(d && d.k!=null) kdjLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">KDJ(9,3,3)</span><span class="legend-value" style="color:#E6A23C">K: ${{fmtLegendDec3(d.k)}}</span><span class="legend-value" style="color:#2196F3">D: ${{fmtLegendDec3(d.d)}}</span><span class="legend-value" style="color:#E040FB">J: ${{fmtLegendDec3(d.j)}}</span></div>`; }}
                     
                     const rsiLegendEl = document.getElementById('rsi-legend');
-                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{fmtDec3(d.rsi6)}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{fmtDec3(d.rsi12)}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{fmtDec3(d.rsi24)}}</span></div>`; }}
+                    if (rsiLegendEl && rsiData.length > 0) {{ const d = rsiData.find(x => x.time === t); if(d) rsiLegendEl.innerHTML=`<div class="legend-row"><span class="legend-label">RSI(6,12,24)</span><span class="legend-value" style="color:#E6A23C">RSI6: ${{fmtLegendDec3(d.rsi6)}}</span><span class="legend-value" style="color:#2196F3">RSI12: ${{fmtLegendDec3(d.rsi12)}}</span><span class="legend-value" style="color:#E040FB">RSI24: ${{fmtLegendDec3(d.rsi24)}}</span></div>`; }}
                     
                     const obvLegendEl = document.getElementById('obv-legend');
                     if (obvLegendEl && obvData.length > 0) {{
@@ -697,7 +694,7 @@ with col_main:
                     if (biasLegendEl && biasData.length > 0) {{
                         const d = biasData.find(x => x.time === t);
                         if (d) {{
-                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{fmtDec3(d.b6)}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{fmtDec3(d.b12)}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{fmtDec3(d.b24)}}</span></div>`;
+                            biasLegendEl.innerHTML = `<div class="legend-row"><span class="legend-label">BIAS(6,12,24)</span><span class="legend-value" style="color: #2196F3">BIAS1: ${{fmtLegendDec3(d.b6)}}</span><span class="legend-value" style="color: #E6A23C">BIAS2: ${{fmtLegendDec3(d.b12)}}</span><span class="legend-value" style="color: #E040FB">BIAS3: ${{fmtLegendDec3(d.b24)}}</span></div>`;
                         }}
                     }}
                 }}
