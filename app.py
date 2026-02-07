@@ -394,7 +394,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V100 - 移除全域 localization，強制分離格式)
+    # 5. JavaScript (★ 核心：V101 - 變數順序修復 + 終極整數化)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -470,7 +470,11 @@ with col_main:
 
                 if (!candlesData || candlesData.length === 0) throw new Error("No Data");
 
+                // ★ 定義變數 (移到最上方)
                 const FORCE_WIDTH = 60;
+                
+                // ★ lineOpts 必須在此定義，才能被下面的 createSubChart 使用
+                const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
 
                 // 1. 主圖: 字體 13.5px
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
@@ -497,8 +501,7 @@ with col_main:
                     }};
                 }}
 
-                // ★ FORMATTERS (定義工具函數)
-                // 1. Axis 專用 (強制整數)
+                // ★ FORMATTERS
                 function fmtInt(val) {{ return Math.round(val).toString(); }}
                 function fmtBigInt(val) {{
                     let absVal = Math.abs(val);
@@ -506,9 +509,10 @@ with col_main:
                     if (absVal >= 10000) return Math.round(val/10000).toString() + '萬';
                     return Math.round(val).toString();
                 }}
-
-                // 2. Legend 專用 (保留小數)
-                function fmtDec2(val) {{ return val.toFixed(2); }}
+                function fmtStandard(val) {{
+                    if (val === undefined || val === null) return '-';
+                    return val.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                }}
                 function fmtDec3(val) {{ return val.toFixed(3); }}
                 function fmtBigDec3(val) {{
                     let absVal = Math.abs(val);
@@ -517,25 +521,22 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // ==========================
-                // 1. 主圖 Main
-                // ==========================
+                // 1. 主圖
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
-                    // ★ V100: 移除 localization
+                    localization: {{ priceFormatter: (p) => fmtStandard(p) }}, 
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => fmtInt(p) // Axis: 整數
+                        tickMarkFormatter: (p) => fmtInt(p)
                     }}
                 }});
                 
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746',
-                    priceFormat: {{ type: 'custom', formatter: (p) => fmtDec2(p) }} // Legend: 2位小數
+                    priceFormat: {{ type: 'custom', formatter: (p) => fmtStandard(p) }}
                 }});
                 candleSeries.setData(candlesData);
 
-                // MA (底層)
                 if (maData.length > 0) {{
                     if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
                     if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
@@ -543,31 +544,25 @@ with col_main:
                     if (maData[0].ma60 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#00E676', title: 'MA(60)', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma60}}))); }}
                 }}
                 
-                // BOLL (上層)
                 if (bollData.length > 0) {{
                     mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081', title: 'MID', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.mid}})));
                     mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700', title: 'UP', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.up}})));
                     mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF', title: 'LOW', priceFormat: {{ type: 'custom', formatter: (p)=>fmtDec3(p) }} }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
                 }}
 
-                // ==========================
                 // 2. VOL Chart
-                // ==========================
                 const volChartEl = document.getElementById('vol-chart');
                 let volChart = null, volSeries = null;
                 if (volChartEl.style.display !== 'none') {{
                     volChart = LightweightCharts.createChart(volChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        // ★ Axis: 強制整數 (fmtBigInt)
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
                             tickMarkFormatter: (p) => fmtBigInt(p)
                         }}
-                        // ★ 注意: 這裡完全不寫 localization
                     }});
                     
-                    // ★ Legend: 透過 addSeries 的 priceFormat 控制 (fmtBigDec3)
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', priceLineVisible: false,
                         priceFormat: {{ type: 'custom', formatter: (p) => fmtBigDec3(p) }}
@@ -575,21 +570,18 @@ with col_main:
                     volSeries.setData(volData);
                 }}
 
-                // ==========================
-                // 3. 副圖們 (MACD, KDJ, RSI, BIAS) -> Axis強制整數
-                // ==========================
-                function createSubChart(id, data, colorInfo) {{
+                // 3. Helper for SubCharts
+                function createSubChart(id) {{
                     const el = document.getElementById(id);
                     if (el.style.display === 'none') return null;
-                    const chart = LightweightCharts.createChart(el, {{
+                    return LightweightCharts.createChart(el, {{
                         layout: indicatorLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtInt(p) // ★ Axis 整數
+                            tickMarkFormatter: (p) => fmtInt(p)
                         }}
                     }});
-                    return chart;
                 }}
 
                 const macdChart = createSubChart('macd-chart');
@@ -620,23 +612,19 @@ with col_main:
                     biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB', priceFormat: {{type:'custom', formatter:fmtDec3}} }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
                 }}
 
-                // ==========================
                 // 4. OBV Chart
-                // ==========================
                 const obvChartEl = document.getElementById('obv-chart');
                 let obvChart = null;
                 if (obvChartEl.style.display !== 'none') {{
                     obvChart = LightweightCharts.createChart(obvChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        // ★ Axis: 強制整數 (fmtBigInt)
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
                             tickMarkFormatter: (p) => fmtBigInt(p)
                         }}
                     }});
                     
-                    // ★ Legend: 小數 (fmtBigDec3)
                     if (obvData.length > 0) {{
                         const s1 = obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700', priceFormat: {{type:'custom', formatter: (p)=>fmtBigDec3(p)}} }});
                         s1.setData(obvData.map(d=>({{time:d.time, value:d.obv}})));
@@ -645,11 +633,7 @@ with col_main:
                     }}
                 }}
 
-                // 同步與 Resize
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
-                
-                // Legend 更新邏輯 (因為移除了 localization, 這裡需要手動調用 formatter 顯示)
-                // 這裡我們直接用數據源的 formatter 即可
                 
                 function updateLegends(param) {{
                     let t;
