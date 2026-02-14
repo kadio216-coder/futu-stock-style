@@ -35,10 +35,10 @@ st.markdown("""
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #2962FF !important; color: white !important;}
     
-    /* 策略儀表板樣式 */
+    /* 策略儀表板樣式 - ★ 修改為 5 等份 */
     .strategy-grid {
         display: grid;
-        grid-template-columns: repeat(4, 1fr); 
+        grid-template-columns: repeat(5, 1fr); 
         gap: 10px;
         margin-bottom: 15px;
     }
@@ -143,6 +143,23 @@ def get_data(ticker, period="max", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
+        # --- ★ 新增：籌碼資料擴充 (Mock Data) ---
+        # 實戰中，請在此處撰寫 requests 呼叫你的 FastAPI 或是 FinMind API，
+        # 並使用 pd.merge() 依照日期將「家數差」與「外資買超」合併進 DataFrame 中。
+        if ticker.endswith('.TW') or ticker.endswith('.TWO'):
+            # 這裡用 numpy 隨機生成合理範圍內的數據作為 UI 測試
+            np.random.seed(42) 
+            data['branch_diff'] = np.random.randint(-150, 150, size=len(data)) # 家數差
+            data['foreign_buy'] = np.random.randint(-1000, 1000, size=len(data)) # 外資買超(張)
+            
+            # 為了讓你看到觸發成功的狀態，我強制將最後兩天的家數差設為負，外資買超設為正
+            data.loc[data.index[-2:], 'branch_diff'] = [-50, -10]
+            data.loc[data.index[-1:], 'foreign_buy'] = [200]
+        else:
+            data['branch_diff'] = 0
+            data['foreign_buy'] = 0
+        # ----------------------------------------
+        
         data = data.reset_index()
         data.columns = [str(col).lower() for col in data.columns]
         
@@ -163,13 +180,14 @@ def get_data(ticker, period="max", interval="1d"):
         print(f"Data Error: {e}")
         return None
 
-# --- ★ 四大策略偵測邏輯 ---
-def check_4_strategies(df):
+# --- ★ 五大策略偵測邏輯 ---
+def check_5_strategies(df):
     if len(df) < 30: return {}
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     results = {}
     
+    # S1: 帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -184,12 +202,14 @@ def check_4_strategies(df):
     elif not cond1_box: results['S1'] = {'active': False, 'msg': '波動過大'}
     else: results['S1'] = {'active': False, 'msg': '整理中'}
 
+    # S2: 黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     if cond2_cross and cond2_trend: results['S2'] = {'active': True, 'msg': '🌟 黃金交叉'}
     elif curr['ma20'] > curr['ma60']: results['S2'] = {'active': False, 'msg': '多頭排列'}
     else: results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
+    # S3: 布林擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -197,12 +217,27 @@ def check_4_strategies(df):
     elif cond3_squeeze: results['S3'] = {'active': False, 'msg': '壓縮蓄力'}
     else: results['S3'] = {'active': False, 'msg': '通道張開'}
 
+    # S4: KD低檔金叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     if cond4_low and cond4_cross: results['S4'] = {'active': True, 'msg': '🎣 低檔金叉'}
     elif curr['k'] < 20: results['S4'] = {'active': False, 'msg': '超賣鈍化'}
     else: results['S4'] = {'active': False, 'msg': '一般區間'}
     
+    # ★ 新增 S5: 主力籌碼集中 (連兩日家數差為負 + 外資買超)
+    if 'branch_diff' in df.columns and 'foreign_buy' in df.columns:
+        # 家數差連兩日為負，代表散戶連續退場
+        cond5_diff = (curr['branch_diff'] < 0) and (prev['branch_diff'] < 0)
+        # 且最新一日外資站在買方
+        cond5_foreign = curr['foreign_buy'] > 0
+        
+        if cond5_diff and cond5_foreign: results['S5'] = {'active': True, 'msg': '🔥 籌碼集中'}
+        elif curr['branch_diff'] < 0: results['S5'] = {'active': False, 'msg': '散戶退場'}
+        elif curr['branch_diff'] > 100: results['S5'] = {'active': False, 'msg': '⚠️ 籌碼發散'}
+        else: results['S5'] = {'active': False, 'msg': '籌碼中性'}
+    else:
+        results['S5'] = {'active': False, 'msg': '無籌碼資料'}
+        
     return results
 
 col_main, col_tools = st.columns([0.85, 0.15])
@@ -233,18 +268,16 @@ with col_main:
         st.error(f"無數據: {ticker}")
         st.stop()
     
-    strats = check_4_strategies(full_df)
+    strats = check_5_strategies(full_df)
     if strats:
-        s1 = strats['S1']
-        s2 = strats['S2']
-        s3 = strats['S3']
-        s4 = strats['S4']
+        s1, s2, s3, s4, s5 = strats['S1'], strats['S2'], strats['S3'], strats['S4'], strats['S5']
         st.markdown(f"""
         <div class="strategy-grid">
             <div class="strat-card {'strat-active' if s1['active'] else ''}"><div class="strat-title">1. 盤整帶量突破</div><div class="strat-status { 'status-match' if s1['active'] else 'status-wait' }">{s1['msg']}</div></div>
             <div class="strat-card {'strat-active' if s2['active'] else ''}"><div class="strat-title">2. 均線黃金交叉</div><div class="strat-status { 'status-match' if s2['active'] else 'status-wait' }">{s2['msg']}</div></div>
             <div class="strat-card {'strat-active' if s3['active'] else ''}"><div class="strat-title">3. 布林通道擠壓</div><div class="strat-status { 'status-match' if s3['active'] else 'status-wait' }">{s3['msg']}</div></div>
-            <div class="strat-card {'strat-active' if s4['active'] else ''}"><div class="strat-title">4. KD 低檔黃金交叉</div><div class="strat-status { 'status-match' if s4['active'] else 'status-wait' }">{s4['msg']}</div></div>
+            <div class="strat-card {'strat-active' if s4['active'] else ''}"><div class="strat-title">4. KD低檔金叉</div><div class="strat-status { 'status-match' if s4['active'] else 'status-wait' }">{s4['msg']}</div></div>
+            <div class="strat-card {'strat-active' if s5['active'] else ''}"><div class="strat-title">5. 主力籌碼集中</div><div class="strat-status { 'status-match' if s5['active'] else 'status-wait' }">{s5['msg']}</div></div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -440,16 +473,13 @@ with col_main:
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
-                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13 }}; // MACD, BIAS 用 13
-                // ★ V118 新增：專門給 KDJ 和 RSI 使用的 12.5 字體設定
+                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13 }}; 
                 const indicatorLayout125 = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 12.5 }};
-                
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
                 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
 
-                // --- 座標軸 (Axis Ticks) : 物理整數 ---
                 const fmtAxisInt = p => Math.round(p).toString();
                 const fmtAxisBigInt = p => {{
                     let absVal = Math.abs(p);
@@ -458,7 +488,6 @@ with col_main:
                     return Math.round(p).toString();
                 }};
 
-                // --- 游標 (Crosshair Cursor) : 原汁原味小數 ---
                 const fmtDec2 = p => p.toFixed(2);
                 const fmtDec3 = p => p.toFixed(3);
                 const fmtBigDec3 = p => {{
@@ -487,15 +516,15 @@ with col_main:
                 candleSeries.setData(candlesData);
 
                 if (maData.length > 0) {{
-                    if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
-                    if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
-                    if (maData[0].ma20 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(maData.map(d=>({{time:d.time, value:d.ma20}}))); }}
-                    if (maData[0].ma60 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#00E676' }}).setData(maData.map(d=>({{time:d.time, value:d.ma60}}))); }}
+                    if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500' }}).setData(maData.map(d=>({{time:d.time, value:d.ma5} મોટા部分}))); }}
+                    if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(maData.map(d=>({{time:d.time, value:d.ma10} મોટા部分}))); }}
+                    if (maData[0].ma20 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(maData.map(d=>({{time:d.time, value:d.ma20} મોટા部分}))); }}
+                    if (maData[0].ma60 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#00E676' }}).setData(maData.map(d=>({{time:d.time, value:d.ma60} મોટા部分}))); }}
                 }}
                 if (bollData.length > 0) {{
-                    mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081' }}).setData(bollData.map(d=>({{time:d.time, value:d.mid}})));
-                    mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700' }}).setData(bollData.map(d=>({{time:d.time, value:d.up}})));
-                    mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF' }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
+                    mainChart.addLineSeries({{ ...lineOpts, lineWidth: 1.5, color: '#FF4081' }}).setData(bollData.map(d=>({{time:d.time, value:d.mid} મોટા部分})));
+                    mainChart.addLineSeries({{ ...lineOpts, color: '#FFD700' }}).setData(bollData.map(d=>({{time:d.time, value:d.up} મોટા部分})));
+                    mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF' }}).setData(bollData.map(d=>({{time:d.time, value:d.low} મોટા部分})));
                 }}
 
                 // ==========================================
@@ -525,7 +554,7 @@ with col_main:
                     const el = document.getElementById(id);
                     if (el.style.display === 'none') return null;
                     return LightweightCharts.createChart(el, {{
-                        layout: customLayout, // ★ 使用傳入的專屬 layout
+                        layout: customLayout,
                         grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         localization: {{ priceFormatter: fmtDec3 }}, 
@@ -536,36 +565,32 @@ with col_main:
                     }});
                 }}
 
-                // MACD 使用預設 13px
                 const macdChart = createSubChart('macd-chart', indicatorLayout);
                 if (macdChart && macdData.length > 0) {{
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(macdData.map(d=>({{time:d.time, value:d.dif}})));
-                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(macdData.map(d=>({{time:d.time, value:d.dea}})));
-                    macdChart.addHistogramSeries().setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color}})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(macdData.map(d=>({{time:d.time, value:d.dif} મોટા部分})));
+                    macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(macdData.map(d=>({{time:d.time, value:d.dea} મોટા部分})));
+                    macdChart.addHistogramSeries().setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color} મોટા部分})));
                 }}
 
-                // ★ KDJ 使用 12.5px
                 const kdjChart = createSubChart('kdj-chart', indicatorLayout125);
                 if (kdjChart && kdjData.length > 0) {{
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(kdjData.map(d=>({{time:d.time, value:d.k}})));
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d=>({{time:d.time, value:d.d}})));
-                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(kdjData.map(d=>({{time:d.time, value:d.j}})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(kdjData.map(d=>({{time:d.time, value:d.k} મોટા部分})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d=>({{time:d.time, value:d.d} મોટા部分})));
+                    kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(kdjData.map(d=>({{time:d.time, value:d.j} મોટા部分})));
                 }}
 
-                // ★ RSI 使用 12.5px
                 const rsiChart = createSubChart('rsi-chart', indicatorLayout125);
                 if (rsiChart && rsiData.length > 0) {{
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6}})));
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12}})));
-                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24}})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6} મોટા部分})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12} મોટા部分})));
+                    rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24} મોટા部分})));
                 }}
 
-                // BIAS 使用預設 13px
                 const biasChart = createSubChart('bias-chart', indicatorLayout);
                 if (biasChart && biasData.length > 0) {{
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(biasData.map(d=>({{time:d.time, value:d.b6}})));
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(biasData.map(d=>({{time:d.time, value:d.b12}})));
-                    biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(biasData.map(d=>({{time:d.time, value:d.b6} મોટા部分})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(biasData.map(d=>({{time:d.time, value:d.b12} મોટા部分})));
+                    biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(biasData.map(d=>({{time:d.time, value:d.b24} મોટા部分})));
                 }}
 
                 // ==========================================
@@ -585,8 +610,8 @@ with col_main:
                     }});
                     
                     if (obvData.length > 0) {{
-                        obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700' }}).setData(obvData.map(d=>({{time:d.time, value:d.obv}})));
-                        obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6' }}).setData(obvData.map(d=>({{time:d.time, value:d.obv_ma}})));
+                        obvChart.addLineSeries({{ ...lineOpts, color: '#FFD700' }}).setData(obvData.map(d=>({{time:d.time, value:d.obv} મોટા部分})));
+                        obvChart.addLineSeries({{ ...lineOpts, color: '#29B6F6' }}).setData(obvData.map(d=>({{time:d.time, value:d.obv_ma} મોટા部分})));
                     }}
                 }}
 
