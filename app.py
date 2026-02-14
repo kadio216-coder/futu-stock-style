@@ -4,7 +4,7 @@ import pandas_ta as ta
 import pandas as pd
 import numpy as np
 import json
-import requests  # ★ 新增：用於串接真實 API
+import requests  # ★ 用於串接真實 API
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import streamlit.components.v1 as components
@@ -36,7 +36,7 @@ st.markdown("""
     div.stButton > button[kind="secondary"] {background-color: #F0F2F5; color: #666666;}
     div.stButton > button[kind="primary"] {background-color: #1A365D !important; color: white !important;}
     
-    /* 日式極簡風策略儀表板樣式 */
+    /* 策略儀表板樣式 */
     .strategy-grid {
         display: grid;
         grid-template-columns: repeat(5, 1fr); 
@@ -44,24 +44,23 @@ st.markdown("""
         margin-bottom: 20px;
     }
     .strat-card {
-        background-color: #FCFBF9; /* 米白底色 */
+        background-color: #FCFBF9; 
         border: 1px solid #EBEBEB;
-        border-radius: 12px; /* 粗圓角 */
+        border-radius: 12px; 
         padding: 16px 10px; 
         text-align: center;
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
         box-shadow: 0 2px 4px rgba(0,0,0,0.02);
         transition: all 0.3s ease;
     }
-    /* 觸發成功的狀態 */
     .strat-active {
-        background-color: #F3FAED; /* 極淡的抹茶綠底 */
-        border: 1.5px solid #4A7A4A; /* 松葉綠邊框 */
+        background-color: #F3FAED; 
+        border: 1.5px solid #4A7A4A; 
         box-shadow: 0 4px 8px rgba(74, 122, 74, 0.08);
     }
     .strat-title { 
         font-size: 13px; 
-        color: #1A365D; /* 海軍藍標題 */
+        color: #1A365D; 
         font-weight: 600; 
         margin-bottom: 8px; 
         letter-spacing: 0.5px;
@@ -71,8 +70,8 @@ st.markdown("""
         font-weight: bold; 
     }
     
-    .status-match { color: #C24A3B; } /* 磚紅色重點色 */
-    .status-wait { color: #A0A0A0; font-weight: normal; }  /* 未符合時的灰黑色 */
+    .status-match { color: #C24A3B; } 
+    .status-wait { color: #A0A0A0; font-weight: normal; }  
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,39 +92,65 @@ with st.sidebar:
 # ---------------------------------------------------------
 # 3. 籌碼 API 串接層 (FinMind)
 # ---------------------------------------------------------
-@st.cache_data(ttl=3600)  # 快取 1 小時避免被 FinMind 鎖 IP
+@st.cache_data(ttl=3600)  
 def get_real_chip_data(ticker, start_date_str):
-    """透過 FinMind API 獲取外資買賣超資料"""
+    """透過 FinMind API 獲取「外資買賣超」與「融資餘額」資料"""
     ticker_no = ticker.split('.')[0] 
     url = "https://api.finmindtrade.com/api/v4/data"
-    params = {
+    
+    # 準備空 DataFrame 以防 API 沒資料
+    df_foreign = pd.DataFrame(columns=['Date', 'foreign_buy'])
+    df_margin_res = pd.DataFrame(columns=['Date', 'margin_diff'])
+
+    # 1. 抓取外資買賣超
+    params_inst = {
         "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
         "data_id": ticker_no,
         "start_date": start_date_str,
     }
-    
     try:
-        res = requests.get(url, params=params, timeout=5)
+        res = requests.get(url, params=params_inst, timeout=5)
         data = res.json()
         if data["msg"] == "success" and len(data["data"]) > 0:
             df_inst = pd.DataFrame(data["data"])
-            # 篩選出外資並加總
-            df_foreign = df_inst[df_inst['name'].str.contains('外資')]
-            df_foreign = df_foreign.groupby('date')['buy_sell'].sum().reset_index()
-            
-            # 整理欄位準備合併
-            df_foreign.rename(columns={'date': 'Date', 'buy_sell': 'foreign_buy'}, inplace=True)
-            df_foreign['Date'] = pd.to_datetime(df_foreign['Date'])
-            
-            # 轉換為「張」
-            df_foreign['foreign_buy'] = df_foreign['foreign_buy'] / 1000
-            
-            return df_foreign.set_index('Date')
-        else:
-            return pd.DataFrame(columns=['foreign_buy'])
+            df_f = df_inst[df_inst['name'].str.contains('外資')]
+            df_f = df_f.groupby('date')['buy_sell'].sum().reset_index()
+            df_f.rename(columns={'date': 'Date', 'buy_sell': 'foreign_buy'}, inplace=True)
+            df_f['Date'] = pd.to_datetime(df_f['Date'])
+            df_f['foreign_buy'] = df_f['foreign_buy'] / 1000 # 轉成張
+            df_foreign = df_f
     except Exception as e:
-        print(f"FinMind API Error: {e}")
-        return pd.DataFrame(columns=['foreign_buy'])
+        print(f"外資 API Error: {e}")
+
+    # 2. 抓取融資餘額增減 (代表散戶)
+    params_margin = {
+        "dataset": "TaiwanStockMarginPurchaseShortSale",
+        "data_id": ticker_no,
+        "start_date": start_date_str,
+    }
+    try:
+        res2 = requests.get(url, params=params_margin, timeout=5)
+        data2 = res2.json()
+        if data2["msg"] == "success" and len(data2["data"]) > 0:
+            df_m = pd.DataFrame(data2["data"])
+            df_m = df_m[['date', 'MarginPurchaseTodayBalance']]
+            df_m.rename(columns={'date': 'Date'}, inplace=True)
+            df_m['Date'] = pd.to_datetime(df_m['Date'])
+            df_m = df_m.sort_values('Date')
+            # 計算每日融資增減張數
+            df_m['margin_diff'] = df_m['MarginPurchaseTodayBalance'].diff()
+            df_margin_res = df_m[['Date', 'margin_diff']]
+    except Exception as e:
+        print(f"融資 API Error: {e}")
+
+    # 合併外資與融資資料
+    df_chip = pd.merge(df_foreign, df_margin_res, on='Date', how='outer')
+    if not df_chip.empty:
+        df_chip = df_chip.set_index('Date')
+    else:
+        df_chip = pd.DataFrame(columns=['foreign_buy', 'margin_diff'])
+        
+    return df_chip
 
 # ---------------------------------------------------------
 # 4. K線資料層
@@ -200,13 +225,12 @@ def get_data(ticker, period="max", interval="1d"):
             
             # 左合併資料
             data = data.join(df_chip, how='left')
+            # 填補空值以防程式報錯
             data['foreign_buy'] = data['foreign_buy'].fillna(0)
-            
-            # 因家數差無免費 API，暫時寫死 -1（代表散戶退場），讓策略以「外資真實買超」為主判定
-            data['branch_diff'] = -1 
+            data['margin_diff'] = data['margin_diff'].fillna(0)
         else:
-            data['branch_diff'] = 0
             data['foreign_buy'] = 0
+            data['margin_diff'] = 0
         # ----------------------------------------
         
         data = data.reset_index()
@@ -273,14 +297,19 @@ def check_5_strategies(df):
     elif curr['k'] < 20: results['S4'] = {'active': False, 'msg': '超賣鈍化'}
     else: results['S4'] = {'active': False, 'msg': '一般區間'}
     
-    # S5: 主力籌碼集中 (目前依賴外資真實買超)
-    if 'branch_diff' in df.columns and 'foreign_buy' in df.columns:
-        cond5_diff = (curr['branch_diff'] < 0) and (prev['branch_diff'] < 0)
-        cond5_foreign = curr['foreign_buy'] > 0
-        if cond5_diff and cond5_foreign: results['S5'] = {'active': True, 'msg': '🔥 籌碼集中'}
-        elif curr['branch_diff'] < 0: results['S5'] = {'active': False, 'msg': '散戶退場'}
-        elif curr['branch_diff'] > 100: results['S5'] = {'active': False, 'msg': '⚠️ 籌碼發散'}
-        else: results['S5'] = {'active': False, 'msg': '籌碼中性'}
+    # S5: 主力籌碼集中 (外資真實買超 + 融資真實減少)
+    if 'margin_diff' in df.columns and 'foreign_buy' in df.columns:
+        cond5_margin = curr['margin_diff'] < 0  # 融資減少代表散戶退場
+        cond5_foreign = curr['foreign_buy'] > 0 # 外資大於零代表大戶進場
+        
+        if cond5_margin and cond5_foreign: 
+            results['S5'] = {'active': True, 'msg': '🔥 籌碼集中'}
+        elif cond5_margin: 
+            results['S5'] = {'active': False, 'msg': '散戶退場'}
+        elif cond5_foreign: 
+            results['S5'] = {'active': False, 'msg': '法人單買'}
+        else: 
+            results['S5'] = {'active': False, 'msg': '籌碼發散'}
     else:
         results['S5'] = {'active': False, 'msg': '無籌碼資料'}
         
