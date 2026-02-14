@@ -4,16 +4,16 @@ import pandas_ta as ta
 import pandas as pd
 import numpy as np
 import json
+import requests  # ★ 新增：用於串接真實 API
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# 1. 頁面設定
+# 1. 頁面設定與樣式 (日式極簡風)
 # ---------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Futu Desktop Replica (Final)")
 
-# ★ 修復：將 CSS 用 st.markdown 完整包起來，並套用日式極簡風
 st.markdown("""
 <style>
     .block-container {
@@ -55,8 +55,8 @@ st.markdown("""
     }
     /* 觸發成功的狀態 */
     .strat-active {
-        background-color: #F3FAED; /* 極淡的抹茶綠底，比純白更柔和 */
-        border: 1.5px solid #4A7A4A; /* 沉穩的松葉綠邊框 */
+        background-color: #F3FAED; /* 極淡的抹茶綠底 */
+        border: 1.5px solid #4A7A4A; /* 松葉綠邊框 */
         box-shadow: 0 4px 8px rgba(74, 122, 74, 0.08);
     }
     .strat-title { 
@@ -71,7 +71,7 @@ st.markdown("""
         font-weight: bold; 
     }
     
-    .status-match { color: #C24A3B; } /* 磚紅色重點色，取代過度刺眼的顏色 */
+    .status-match { color: #C24A3B; } /* 磚紅色重點色 */
     .status-wait { color: #A0A0A0; font-weight: normal; }  /* 未符合時的灰黑色 */
 </style>
 """, unsafe_allow_html=True)
@@ -91,7 +91,44 @@ with st.sidebar:
     is_tw_stock = ticker.endswith('.TW') or ticker.endswith('.TWO')
 
 # ---------------------------------------------------------
-# 3. 資料層
+# 3. 籌碼 API 串接層 (FinMind)
+# ---------------------------------------------------------
+@st.cache_data(ttl=3600)  # 快取 1 小時避免被 FinMind 鎖 IP
+def get_real_chip_data(ticker, start_date_str):
+    """透過 FinMind API 獲取外資買賣超資料"""
+    ticker_no = ticker.split('.')[0] 
+    url = "https://api.finmindtrade.com/api/v4/data"
+    params = {
+        "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
+        "data_id": ticker_no,
+        "start_date": start_date_str,
+    }
+    
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+        if data["msg"] == "success" and len(data["data"]) > 0:
+            df_inst = pd.DataFrame(data["data"])
+            # 篩選出外資並加總
+            df_foreign = df_inst[df_inst['name'].str.contains('外資')]
+            df_foreign = df_foreign.groupby('date')['buy_sell'].sum().reset_index()
+            
+            # 整理欄位準備合併
+            df_foreign.rename(columns={'date': 'Date', 'buy_sell': 'foreign_buy'}, inplace=True)
+            df_foreign['Date'] = pd.to_datetime(df_foreign['Date'])
+            
+            # 轉換為「張」
+            df_foreign['foreign_buy'] = df_foreign['foreign_buy'] / 1000
+            
+            return df_foreign.set_index('Date')
+        else:
+            return pd.DataFrame(columns=['foreign_buy'])
+    except Exception as e:
+        print(f"FinMind API Error: {e}")
+        return pd.DataFrame(columns=['foreign_buy'])
+
+# ---------------------------------------------------------
+# 4. K線資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def get_data(ticker, period="max", interval="1d"):
@@ -104,7 +141,6 @@ def get_data(ticker, period="max", interval="1d"):
         
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         data.index = data.index.tz_localize(None)
-        
         data.columns = [c.capitalize() for c in data.columns]
         
         if interval == "1y":
@@ -156,13 +192,18 @@ def get_data(ticker, period="max", interval="1d"):
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
         
-        # --- 籌碼資料擴充 (Mock Data) ---
+        # --- ★ 真實籌碼資料合併 ---
         if ticker.endswith('.TW') or ticker.endswith('.TWO'):
-            np.random.seed(42) 
-            data['branch_diff'] = np.random.randint(-150, 150, size=len(data))
-            data['foreign_buy'] = np.random.randint(-1000, 1000, size=len(data))
-            data.loc[data.index[-2:], 'branch_diff'] = [-50, -10]
-            data.loc[data.index[-1:], 'foreign_buy'] = [200]
+            # 取 K 線圖最舊日期作為 API 抓取起點
+            start_dt_str = data.index.min().strftime('%Y-%m-%d')
+            df_chip = get_real_chip_data(ticker, start_dt_str)
+            
+            # 左合併資料
+            data = data.join(df_chip, how='left')
+            data['foreign_buy'] = data['foreign_buy'].fillna(0)
+            
+            # 因家數差無免費 API，暫時寫死 -1（代表散戶退場），讓策略以「外資真實買超」為主判定
+            data['branch_diff'] = -1 
         else:
             data['branch_diff'] = 0
             data['foreign_buy'] = 0
@@ -232,7 +273,7 @@ def check_5_strategies(df):
     elif curr['k'] < 20: results['S4'] = {'active': False, 'msg': '超賣鈍化'}
     else: results['S4'] = {'active': False, 'msg': '一般區間'}
     
-    # S5: 主力籌碼集中
+    # S5: 主力籌碼集中 (目前依賴外資真實買超)
     if 'branch_diff' in df.columns and 'foreign_buy' in df.columns:
         cond5_diff = (curr['branch_diff'] < 0) and (prev['branch_diff'] < 0)
         cond5_foreign = curr['foreign_buy'] > 0
@@ -245,6 +286,9 @@ def check_5_strategies(df):
         
     return results
 
+# ---------------------------------------------------------
+# 5. 前端渲染
+# ---------------------------------------------------------
 col_main, col_tools = st.columns([0.85, 0.15])
 
 with col_tools:
@@ -411,7 +455,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript
+    # 6. JavaScript (前端圖表)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -502,9 +546,6 @@ with col_main:
                     return p.toFixed(3);
                 }};
 
-                // ==========================================
-                // 1. 主圖 Main 
-                // ==========================================
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     layout: mainLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
@@ -532,9 +573,6 @@ with col_main:
                     mainChart.addLineSeries({{ ...lineOpts, color: '#00E5FF' }}).setData(bollData.map(d=>({{time:d.time, value:d.low}})));
                 }}
 
-                // ==========================================
-                // 2. VOL Chart
-                // ==========================================
                 const volChartEl = document.getElementById('vol-chart');
                 let volChart = null, volSeries = null;
                 if (volChartEl.style.display !== 'none') {{
@@ -547,14 +585,10 @@ with col_main:
                             tickMarkFormatter: fmtAxisBigInt 
                         }}
                     }});
-                    
                     volSeries = volChart.addHistogramSeries({{ title: 'VOL', priceLineVisible: false }});
                     volSeries.setData(volData);
                 }}
 
-                // ==========================================
-                // 3. 副圖們 (MACD/KDJ/RSI/BIAS)
-                // ==========================================
                 function createSubChart(id, customLayout) {{
                     const el = document.getElementById(id);
                     if (el.style.display === 'none') return null;
@@ -598,9 +632,6 @@ with col_main:
                     biasChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(biasData.map(d=>({{time:d.time, value:d.b24}})));
                 }}
 
-                // ==========================================
-                // 4. OBV Chart
-                // ==========================================
                 const obvChartEl = document.getElementById('obv-chart');
                 let obvChart = null;
                 if (obvChartEl.style.display !== 'none') {{
