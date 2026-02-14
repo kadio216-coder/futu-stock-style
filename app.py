@@ -440,8 +440,8 @@ with col_main:
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
-                // ★ V116 修正：將副圖字體大小從 14 改為 13.5
-                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13.5 }};
+                // ★ V117 修正：將副圖字體大小改為 13
+                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
                 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
