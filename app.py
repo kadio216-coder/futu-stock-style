@@ -373,7 +373,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ V115: 移除副圖背景色)
+    # 5. JavaScript
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -382,7 +382,6 @@ with col_main:
         <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
-            /* ★ V115 修改：移除副圖的漸層背景，改為純白 */
             .sub-chart {{
                 background-color: #FFFFFF;
                 border-bottom: 1px solid #E0E0E0;
@@ -440,14 +439,27 @@ with col_main:
                 const FORCE_WIDTH = 60;
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
-                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 14 }};
+                
+                // ★ V116 修正：將副圖字體大小從 14 改為 13.5
+                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13.5 }};
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
+                
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
 
-                // ★ FORMATTERS (完全分離策略)
-                
-                // 1. 給 Axis (座標軸) 用的 (絕對整數)
+                function getOpts(layout, scaleMargins) {{
+                    return {{
+                        layout: layout,
+                        grid: grid,
+                        rightPriceScale: {{ 
+                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: scaleMargins
+                        }},
+                        timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
+                        crosshair: crosshair,
+                    }};
+                }}
+
+                // --- 座標軸 (Axis Ticks) : 物理整數 ---
                 const fmtAxisInt = p => Math.round(p).toString();
                 const fmtAxisBigInt = p => {{
                     let absVal = Math.abs(p);
@@ -456,7 +468,7 @@ with col_main:
                     return Math.round(p).toString();
                 }};
 
-                // 2. 給 Crosshair (游標) 用的 (保留小數)
+                // --- 游標 (Crosshair Cursor) : 原汁原味小數 ---
                 const fmtDec2 = p => p.toFixed(2);
                 const fmtDec3 = p => p.toFixed(3);
                 const fmtBigDec3 = p => {{
@@ -472,14 +484,13 @@ with col_main:
                 const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {{
                     layout: mainLayout, grid: grid, crosshair: crosshair,
                     timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                    localization: {{ priceFormatter: fmtDec2 }}, // ★ 游標預設 2位小數
+                    localization: {{ priceFormatter: fmtDec2 }}, 
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: fmtDec2 // ★ 主圖 Axis 保留 2位小數
+                        tickMarkFormatter: fmtDec2 
                     }}
                 }});
                 
-                // ★ 注意：Series 裡面【不要再寫 priceFormat】，讓它繼承 localization
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746'
                 }});
@@ -506,10 +517,10 @@ with col_main:
                     volChart = LightweightCharts.createChart(volChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        localization: {{ priceFormatter: fmtBigDec3 }}, // ★ 游標 3位小數 + 萬
+                        localization: {{ priceFormatter: fmtBigDec3 }}, 
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
-                            tickMarkFormatter: fmtAxisBigInt // ★ Axis 強制整數 + 萬
+                            tickMarkFormatter: fmtAxisBigInt 
                         }}
                     }});
                     
@@ -526,10 +537,10 @@ with col_main:
                     return LightweightCharts.createChart(el, {{
                         layout: indicatorLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        localization: {{ priceFormatter: fmtDec3 }}, // ★ 游標 3位小數
+                        localization: {{ priceFormatter: fmtDec3 }}, 
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: fmtAxisInt // ★ Axis 強制整數
+                            tickMarkFormatter: fmtAxisInt 
                         }}
                     }});
                 }}
@@ -571,10 +582,10 @@ with col_main:
                     obvChart = LightweightCharts.createChart(obvChartEl, {{
                         layout: volObvLayout, grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        localization: {{ priceFormatter: fmtBigDec3 }}, // ★ 游標 3位小數 + 萬
+                        localization: {{ priceFormatter: fmtBigDec3 }}, 
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: fmtAxisBigInt // ★ Axis 強制整數 + 萬
+                            tickMarkFormatter: fmtAxisBigInt 
                         }}
                     }});
                     
@@ -586,7 +597,6 @@ with col_main:
 
                 const allCharts = [mainChart, volChart, macdChart, kdjChart, rsiChart, obvChart, biasChart].filter(c => c !== null);
                 
-                // ★ HTML Legend 永遠都是 3位小數
                 function updateLegends(param) {{
                     let t;
                     if (!param || !param.time) {{
