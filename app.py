@@ -440,24 +440,14 @@ with col_main:
                 const lineOpts = {{ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }};
                 const mainLayout = {{ backgroundColor: '#FFFFFF', textColor: '#333333', fontSize: 13.5 }};
                 
-                // ★ V117 修正：將副圖字體大小改為 13
-                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13 }};
+                const indicatorLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 13 }}; // MACD, BIAS 用 13
+                // ★ V118 新增：專門給 KDJ 和 RSI 使用的 12.5 字體設定
+                const indicatorLayout125 = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 12.5 }};
+                
                 const volObvLayout = {{ backgroundColor: 'transparent', textColor: '#333333', fontSize: 11.5 }};
                 
                 const grid = {{ vertLines: {{ color: '#F0F0F0' }}, horzLines: {{ color: '#F0F0F0' }} }};
                 const crosshair = {{ mode: LightweightCharts.CrosshairMode.Normal }};
-
-                function getOpts(layout, scaleMargins) {{
-                    return {{
-                        layout: layout,
-                        grid: grid,
-                        rightPriceScale: {{ 
-                            borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: scaleMargins
-                        }},
-                        timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
-                        crosshair: crosshair,
-                    }};
-                }}
 
                 // --- 座標軸 (Axis Ticks) : 物理整數 ---
                 const fmtAxisInt = p => Math.round(p).toString();
@@ -531,11 +521,12 @@ with col_main:
                 // ==========================================
                 // 3. 副圖們 (MACD/KDJ/RSI/BIAS)
                 // ==========================================
-                function createSubChart(id) {{
+                function createSubChart(id, customLayout) {{
                     const el = document.getElementById(id);
                     if (el.style.display === 'none') return null;
                     return LightweightCharts.createChart(el, {{
-                        layout: indicatorLayout, grid: grid, crosshair: crosshair,
+                        layout: customLayout, // ★ 使用傳入的專屬 layout
+                        grid: grid, crosshair: crosshair,
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         localization: {{ priceFormatter: fmtDec3 }}, 
                         rightPriceScale: {{ 
@@ -545,28 +536,32 @@ with col_main:
                     }});
                 }}
 
-                const macdChart = createSubChart('macd-chart');
+                // MACD 使用預設 13px
+                const macdChart = createSubChart('macd-chart', indicatorLayout);
                 if (macdChart && macdData.length > 0) {{
                     macdChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(macdData.map(d=>({{time:d.time, value:d.dif}})));
                     macdChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(macdData.map(d=>({{time:d.time, value:d.dea}})));
                     macdChart.addHistogramSeries().setData(macdData.map(d=>({{time:d.time, value:d.hist, color:d.color}})));
                 }}
 
-                const kdjChart = createSubChart('kdj-chart');
+                // ★ KDJ 使用 12.5px
+                const kdjChart = createSubChart('kdj-chart', indicatorLayout125);
                 if (kdjChart && kdjData.length > 0) {{
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(kdjData.map(d=>({{time:d.time, value:d.k}})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(kdjData.map(d=>({{time:d.time, value:d.d}})));
                     kdjChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(kdjData.map(d=>({{time:d.time, value:d.j}})));
                 }}
 
-                const rsiChart = createSubChart('rsi-chart');
+                // ★ RSI 使用 12.5px
+                const rsiChart = createSubChart('rsi-chart', indicatorLayout125);
                 if (rsiChart && rsiData.length > 0) {{
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi6}})));
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi12}})));
                     rsiChart.addLineSeries({{ ...lineOpts, color: '#E040FB' }}).setData(rsiData.map(d=>({{time:d.time, value:d.rsi24}})));
                 }}
 
-                const biasChart = createSubChart('bias-chart');
+                // BIAS 使用預設 13px
+                const biasChart = createSubChart('bias-chart', indicatorLayout);
                 if (biasChart && biasData.length > 0) {{
                     biasChart.addLineSeries({{ ...lineOpts, color: '#2196F3' }}).setData(biasData.map(d=>({{time:d.time, value:d.b6}})));
                     biasChart.addLineSeries({{ ...lineOpts, color: '#E6A23C' }}).setData(biasData.map(d=>({{time:d.time, value:d.b12}})));
