@@ -81,7 +81,7 @@ with st.sidebar:
 # 3. 資料層
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
-def get_data(ticker, period="2y", interval="1d"):
+def get_data(ticker, period="max", interval="1d"):
     try:
         is_quarterly = (interval == "3mo")
         dl_interval = "1mo" if (interval == "1y" or is_quarterly) else interval
@@ -173,6 +173,7 @@ def check_4_strategies(df):
     
     results = {}
     
+    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -191,6 +192,7 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
+    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -201,6 +203,7 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
+    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -212,6 +215,7 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
+    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -246,7 +250,8 @@ with col_main:
     with c_top2: interval_label = st.radio("週期", ["日K", "週K", "月K", "季K", "年K"], index=0, horizontal=True, label_visibility="collapsed")
     
     interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo", "年K": "1y"}
-    full_df = get_data(ticker, period="2y", interval=interval_map[interval_label])
+    # ★ V111 修正：這裡的參數從 "2y" 改成 "max"，釋放完整的歷史資料
+    full_df = get_data(ticker, period="max", interval=interval_map[interval_label])
     
     if full_df is None:
         st.error(f"無數據: {ticker}")
@@ -282,16 +287,12 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    # ==========================================
-    # ★ V110 修復：時間軸與按鈕邏輯
-    # ==========================================
     if 'slider_range' not in st.session_state:
         st.session_state['active_btn'] = '6m'
         start = max_d - relativedelta(months=6)
         if start < min_d: start = min_d
         st.session_state['slider_range'] = (start, max_d)
     else:
-        # 切換股票或週期時，確保範圍不會越界報錯
         curr_start, curr_end = st.session_state['slider_range']
         if not isinstance(curr_start, datetime): curr_start = datetime.combine(curr_start, datetime.min.time())
         if not isinstance(curr_end, datetime): curr_end = datetime.combine(curr_end, datetime.min.time())
@@ -308,7 +309,6 @@ with col_main:
         elif ytd:
             start = datetime(end.year, 1, 1)
         else:
-            # ★ 關鍵修復：這裡會正確計算往前推幾個月/幾年
             start = end - relativedelta(months=months, years=years)
             
         if start < min_d: start = min_d
@@ -336,7 +336,6 @@ with col_main:
     
     start_date, end_date = st.slider("", min_value=min_d, max_value=max_d, key='slider_range', on_change=on_slider_change, format="YYYY-MM-DD", label_visibility="collapsed")
     
-    # 確保結尾包含該日數據
     sd_dt = pd.to_datetime(start_date)
     ed_dt = pd.to_datetime(end_date)
     ed_dt = ed_dt.replace(hour=23, minute=59, second=59)
@@ -415,7 +414,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 保留 V108 的所有完美格式設定)
+    # 5. JavaScript (保持 V108 格式設定不變)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -512,25 +511,31 @@ with col_main:
                     }};
                 }}
 
-                // ★ FORMATTERS 
-                function fmtInt(val) {{ return Math.round(val).toString(); }} 
-                function fmtBigInt(val) {{ 
+                // ★ FORMATTERS (定義工具函數)
+                
+                // Axis Formatter (座標軸) -> 【全部強制整數】
+                function fmtInt(val) {{ return Math.round(val).toString(); }}
+                
+                // Big Axis Formatter (大數整數) -> 【強制整數】
+                function fmtBigInt(val) {{
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return Math.round(val/100000000).toString() + '億';
                     if (absVal >= 10000) return Math.round(val/10000).toString() + '萬';
                     return Math.round(val).toString();
                 }}
 
-                function fmtDec2(val) {{ return val.toFixed(2); }} 
-                function fmtDec3(val) {{ return val.toFixed(3); }} 
-                function fmtBigDec3(val) {{ 
+                // Series/Cursor Formatter (游標顯示)
+                function fmtDec2(val) {{ return val.toFixed(2); }} // 主圖/MA (2位)
+                function fmtDec3(val) {{ return val.toFixed(3); }} // 副圖 (3位)
+                function fmtBigDec3(val) {{ // VOL/OBV (3位)
                     let absVal = Math.abs(val);
                     if (absVal >= 100000000) return (val/100000000).toFixed(3) + '億';
                     if (absVal >= 10000) return (val/10000).toFixed(3) + '萬';
                     return val.toFixed(3);
                 }}
 
-                function fmtLegendDec3(val) {{ return val.toFixed(3); }} 
+                // Legend Formatter (左上角)
+                function fmtLegendDec3(val) {{ return val.toFixed(3); }} // 主圖 Legend (3位)
 
                 // ==========================================
                 // 1. 主圖 Main (Axis:整數, Cursor:2位, Legend:3位)
@@ -539,16 +544,18 @@ with col_main:
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => fmtInt(p) // ★ Axis: 整數
+                        tickMarkFormatter: (p) => fmtInt(p) // ★ Axis: 整數 (1124)
                     }}
                 }});
                 
+                // ★ Cursor: 2位小數 (1124.12)
                 const candleSeries = mainChart.addCandlestickSeries({{
                     upColor: '#FF5252', downColor: '#00B746', borderUpColor: '#FF5252', borderDownColor: '#00B746', wickUpColor: '#FF5252', wickDownColor: '#00B746',
                     priceFormat: {{ type: 'custom', formatter: (p) => fmtDec2(p) }} 
                 }});
                 candleSeries.setData(candlesData);
 
+                // MA/BOLL Cursor 設定 (2位小數)
                 if (maData.length > 0) {{
                     if (maData[0].ma5 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#FFA500', title: 'MA(5)', priceFormat: {{ type: 'custom', formatter: fmtDec2 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma5}}))); }}
                     if (maData[0].ma10 !== undefined) {{ mainChart.addLineSeries({{ ...lineOpts, color: '#2196F3', title: 'MA(10)', priceFormat: {{ type: 'custom', formatter: fmtDec2 }} }}).setData(maData.map(d=>({{time:d.time, value:d.ma10}}))); }}
@@ -565,7 +572,7 @@ with col_main:
                 mainChart.priceScale('right').applyOptions({{ tickMarkFormatter: (p) => fmtInt(p) }});
 
                 // ==========================================
-                // 2. VOL Chart
+                // 2. VOL Chart (Axis:整數, Cursor:3位)
                 // ==========================================
                 const volChartEl = document.getElementById('vol-chart');
                 let volChart = null, volSeries = null;
@@ -575,13 +582,14 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.2, bottom: 0}},
-                            tickMarkFormatter: (p) => fmtBigInt(p) 
+                            tickMarkFormatter: (p) => fmtBigInt(p) // ★ 座標軸: 8000萬
                         }}
                     }});
                     
+                    // ★ Cursor: 3位小數
                     volSeries = volChart.addHistogramSeries({{ 
                         title: 'VOL', priceLineVisible: false,
-                        priceFormat: {{ type: 'custom', formatter: (p) => fmtBigDec3(p) }} 
+                        priceFormat: {{ type: 'custom', formatter: (p) => fmtBigDec3(p) }} // ★ Cursor: 3位小數
                     }});
                     volSeries.setData(volData);
                     
@@ -589,7 +597,7 @@ with col_main:
                 }}
 
                 // ==========================================
-                // 3. 副圖們 
+                // 3. 副圖們 (Axis:整數, Cursor:3位)
                 // ==========================================
                 function createSubChart(id) {{
                     const el = document.getElementById(id);
@@ -599,7 +607,7 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtInt(p) 
+                            tickMarkFormatter: (p) => fmtInt(p) // ★ 座標軸: 整數
                         }}
                     }});
                     return chart;
@@ -648,7 +656,7 @@ with col_main:
                         timeScale: {{ borderColor: '#E0E0E0', timeVisible: true, rightOffset: 5 }},
                         rightPriceScale: {{ 
                             borderColor: '#E0E0E0', visible: true, minimumWidth: FORCE_WIDTH, scaleMargins: {{top: 0.1, bottom: 0.1}},
-                            tickMarkFormatter: (p) => fmtBigInt(p) 
+                            tickMarkFormatter: (p) => fmtBigInt(p) // ★ 座標軸: 50萬
                         }}
                     }});
                     
@@ -670,6 +678,7 @@ with col_main:
                         else return;
                     }} else {{ t = param.time; }}
 
+                    // ★ Legend: 使用 3位小數 (fmtLegendDec3)
                     const mainLegendEl = document.getElementById('main-legend');
                     if (mainLegendEl && maData.length > 0) {{ const d = maData.find(x => x.time === t); if(d) {{ let h='<div class="legend-row"><span class="legend-label">MA(5,10,20,60)</span>'; if(d.ma5!=null)h+=`<span class="legend-value" style="color:#FFA500">MA5:${{fmtLegendDec3(d.ma5)}}</span> `; if(d.ma10!=null)h+=`<span class="legend-value" style="color:#2196F3">MA10:${{fmtLegendDec3(d.ma10)}}</span> `; if(d.ma20!=null)h+=`<span class="legend-value" style="color:#E040FB">MA20:${{fmtLegendDec3(d.ma20)}}</span> `; if(d.ma60!=null)h+=`<span class="legend-value" style="color:#00E676">MA60:${{fmtLegendDec3(d.ma60)}}</span>`; h+='</div>'; mainLegendEl.innerHTML=h; }} }}
                     if (mainLegendEl && bollData.length > 0) {{ const d = bollData.find(x => x.time === t); if(d) mainLegendEl.innerHTML += `<div class="legend-row"><span class="legend-label">BOLL(20,2)</span><span class="legend-value" style="color:#FF4081">MID:${{fmtLegendDec3(d.mid)}}</span><span class="legend-value" style="color:#FFD700">UP:${{fmtLegendDec3(d.up)}}</span><span class="legend-value" style="color:#00E5FF">LOW:${{fmtLegendDec3(d.low)}}</span></div>`; }}
