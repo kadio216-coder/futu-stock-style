@@ -140,8 +140,6 @@ def get_data(ticker, period="2y", interval="1d"):
         data['BIAS12'] = (data[close_col] - sma12) / sma12 * 100
         data['BIAS24'] = (data[close_col] - sma24) / sma24 * 100
 
-        # ★ V109 修正：移除 data = data.tail(130).copy() 封印，釋放完整歷史資料
-
         # ★ 重算 OBV
         data['OBV'] = ta.obv(data[close_col], data['volume'])
         data['OBV_MA10'] = ta.sma(data['OBV'], length=10)
@@ -175,7 +173,6 @@ def check_4_strategies(df):
     
     results = {}
     
-    # 1. 盤整後帶量突破
     past_20 = df.iloc[-21:-1]
     box_high = past_20['high'].max()
     box_low = past_20['low'].min()
@@ -194,7 +191,6 @@ def check_4_strategies(df):
     else:
         results['S1'] = {'active': False, 'msg': '整理中'}
 
-    # 2. 均線黃金交叉
     cond2_cross = (prev['ma20'] < prev['ma60']) and (curr['ma20'] > curr['ma60'])
     cond2_trend = curr['close'] > curr['ma120']
     
@@ -205,7 +201,6 @@ def check_4_strategies(df):
     else:
         results['S2'] = {'active': False, 'msg': '空頭/整理'}
 
-    # 3. 布林通道擠壓
     bw = (curr['boll_upper'] - curr['boll_lower']) / curr['boll_mid']
     cond3_squeeze = bw < 0.10
     cond3_break = curr['close'] > curr['boll_upper']
@@ -217,7 +212,6 @@ def check_4_strategies(df):
     else:
         results['S3'] = {'active': False, 'msg': '通道張開'}
 
-    # 4. KD 低檔黃金交叉
     cond4_low = curr['k'] < 20
     cond4_cross = (prev['k'] < prev['d']) and (curr['k'] > curr['d'])
     
@@ -288,14 +282,36 @@ with col_main:
         
     min_d, max_d = full_df['date_obj'].min().to_pydatetime(), full_df['date_obj'].max().to_pydatetime()
     
-    if 'active_btn' not in st.session_state: st.session_state['active_btn'] = '6m' 
+    # ==========================================
+    # ★ V110 修復：時間軸與按鈕邏輯
+    # ==========================================
     if 'slider_range' not in st.session_state:
-        st.session_state['slider_range'] = (min_d, max_d)
+        st.session_state['active_btn'] = '6m'
+        start = max_d - relativedelta(months=6)
+        if start < min_d: start = min_d
+        st.session_state['slider_range'] = (start, max_d)
+    else:
+        # 切換股票或週期時，確保範圍不會越界報錯
+        curr_start, curr_end = st.session_state['slider_range']
+        if not isinstance(curr_start, datetime): curr_start = datetime.combine(curr_start, datetime.min.time())
+        if not isinstance(curr_end, datetime): curr_end = datetime.combine(curr_end, datetime.min.time())
+        curr_start = max(min_d, min(curr_start, max_d))
+        curr_end = max(min_d, min(curr_end, max_d))
+        if curr_start >= curr_end: curr_start = min_d
+        st.session_state['slider_range'] = (curr_start, curr_end)
 
     def handle_btn_click(btn_key, months=0, years=0, ytd=False, is_max=False):
         st.session_state['active_btn'] = btn_key
         end = max_d
-        start = min_d 
+        if is_max:
+            start = min_d
+        elif ytd:
+            start = datetime(end.year, 1, 1)
+        else:
+            # ★ 關鍵修復：這裡會正確計算往前推幾個月/幾年
+            start = end - relativedelta(months=months, years=years)
+            
+        if start < min_d: start = min_d
         st.session_state['slider_range'] = (start, end)
 
     btn_cols = st.columns(7)
@@ -311,15 +327,21 @@ with col_main:
 
     for i, btn in enumerate(buttons):
         with btn_cols[i]:
-            is_active = (st.session_state['active_btn'] == btn['key'])
+            is_active = (st.session_state.get('active_btn') == btn['key'])
             if st.button(btn['label'], key=f"btn_{btn['key']}", type="primary" if is_active else "secondary", use_container_width=True):
                 handle_btn_click(btn['key'], months=btn['m'], years=btn['y'], ytd=btn['ytd'], is_max=btn['max'])
                 st.rerun()
 
     def on_slider_change(): st.session_state['active_btn'] = None
+    
     start_date, end_date = st.slider("", min_value=min_d, max_value=max_d, key='slider_range', on_change=on_slider_change, format="YYYY-MM-DD", label_visibility="collapsed")
     
-    df = full_df[(full_df['date_obj'] >= start_date) & (full_df['date_obj'] <= end_date)]
+    # 確保結尾包含該日數據
+    sd_dt = pd.to_datetime(start_date)
+    ed_dt = pd.to_datetime(end_date)
+    ed_dt = ed_dt.replace(hour=23, minute=59, second=59)
+
+    df = full_df[(full_df['date_obj'] >= sd_dt) & (full_df['date_obj'] <= ed_dt)]
     if df.empty: st.stop()
 
     def to_json_list(df, cols):
@@ -393,7 +415,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ V109 繼承 V108 的格式分離邏輯)
+    # 5. JavaScript (★ 保留 V108 的所有完美格式設定)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -491,7 +513,6 @@ with col_main:
                 }}
 
                 // ★ FORMATTERS 
-                // 1. Axis Formatter (座標軸)
                 function fmtInt(val) {{ return Math.round(val).toString(); }} 
                 function fmtBigInt(val) {{ 
                     let absVal = Math.abs(val);
@@ -500,7 +521,6 @@ with col_main:
                     return Math.round(val).toString();
                 }}
 
-                // 2. Cursor (游標)
                 function fmtDec2(val) {{ return val.toFixed(2); }} 
                 function fmtDec3(val) {{ return val.toFixed(3); }} 
                 function fmtBigDec3(val) {{ 
@@ -510,7 +530,6 @@ with col_main:
                     return val.toFixed(3);
                 }}
 
-                // 3. Legend (左上角)
                 function fmtLegendDec3(val) {{ return val.toFixed(3); }} 
 
                 // ==========================================
@@ -520,7 +539,7 @@ with col_main:
                     ...getOpts(mainLayout, {{ top: 0.1, bottom: 0.1 }}),
                     rightPriceScale: {{ 
                         visible: true, borderColor: '#E0E0E0', minimumWidth: FORCE_WIDTH, scaleMargins: {{ top: 0.1, bottom: 0.1 }},
-                        tickMarkFormatter: (p) => fmtInt(p) 
+                        tickMarkFormatter: (p) => fmtInt(p) // ★ Axis: 整數
                     }}
                 }});
                 
