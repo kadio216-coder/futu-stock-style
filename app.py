@@ -373,7 +373,7 @@ with col_main:
     bias_json = to_json_list(df, {'b6':'bias6', 'b12':'bias12', 'b24':'bias24'}) if show_bias else "[]"
 
     # ---------------------------------------------------------
-    # 5. JavaScript (★ 核心：V114 - 徹底乾淨分離，絕不污染座標軸)
+    # 5. JavaScript (★ V115: 移除副圖背景色)
     # ---------------------------------------------------------
     html_code = f"""
     <!DOCTYPE html>
@@ -382,11 +382,9 @@ with col_main:
         <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {{ margin: 0; padding: 0; background-color: #ffffff; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }}
+            /* ★ V115 修改：移除副圖的漸層背景，改為純白 */
             .sub-chart {{
                 background-color: #FFFFFF;
-                background-image: linear-gradient(to right, #FAFAFA calc(100% - 60px), transparent calc(100% - 60px));
-                background-size: 100% calc(100% - 30px);
-                background-repeat: no-repeat;
                 border-bottom: 1px solid #E0E0E0;
                 margin-bottom: 10px;
             }}
